@@ -500,9 +500,9 @@ class LNSNumerics:
         # Apply positivity limiter to intermediate stage
         Q1 = LNSNumerics._apply_positivity_limiter(Q1)
         
-        # Stage 2: Average with corrected step
-        Q2 = Q1 + dt * rhs_function(Q1)
-        Q_new = 0.5 * (Q_current + Q2)
+        # Stage 2: Standard SSP-RK2 combination
+        k2 = rhs_function(Q1)
+        Q_new = 0.5 * (Q_current + Q1 + dt * k2)
         
         # Apply positivity limiter to final result
         Q_new = LNSNumerics._apply_positivity_limiter(Q_new)

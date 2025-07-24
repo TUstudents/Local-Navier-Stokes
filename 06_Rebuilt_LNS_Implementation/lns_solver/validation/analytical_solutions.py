@@ -98,12 +98,13 @@ class RiemannExactSolver:
         }
     
     def _solve_star_region(self) -> Tuple[float, float]:
-        """Solve for pressure and velocity in star region."""
+        """Solve for pressure and velocity in star region using robust hybrid method.
         
-        # Initial guess for pressure
-        p_guess = 0.5 * (self.p_L + self.p_R)
+        Uses bracketing + Newton-Raphson for guaranteed convergence, even for
+        strong rarefaction waves where derivatives become small.
+        """
         
-        # Use Newton-Raphson to solve pressure equation
+        # Define pressure function
         def pressure_function(p):
             f_L = self._shock_rarefaction_function(p, self.rho_L, self.p_L, self.c_L)
             f_R = self._shock_rarefaction_function(p, self.rho_R, self.p_R, self.c_R)
@@ -114,18 +115,74 @@ class RiemannExactSolver:
             df_R = self._shock_rarefaction_derivative(p, self.rho_R, self.p_R, self.c_R)
             return df_L + df_R
         
-        # Newton-Raphson iteration
+        # Robust initial bracketing
+        p_min = 1e-6  # Very small positive pressure
+        p_max = 10.0 * max(self.p_L, self.p_R)  # Large pressure for shock case
+        
+        # Ensure bracket contains root
+        f_min = pressure_function(p_min)
+        f_max = pressure_function(p_max)
+        
+        # If no sign change, expand search range
+        if f_min * f_max > 0:
+            if abs(f_min) < abs(f_max):
+                p_max = 100.0 * max(self.p_L, self.p_R)
+            else:
+                p_min = 1e-8
+        
+        # Better initial guess using two-rarefaction approximation
+        p_guess = ((self.c_L + self.c_R - 0.5 * (self.gamma - 1) * (self.u_R - self.u_L)) /
+                  (self.c_L / self.p_L**((self.gamma - 1) / (2 * self.gamma)) + 
+                   self.c_R / self.p_R**((self.gamma - 1) / (2 * self.gamma))))**(2 * self.gamma / (self.gamma - 1))
+        
+        # Ensure guess is within bracket
+        p_guess = max(p_min, min(p_max, p_guess))
+        
+        # Hybrid method: Start with bracketing if Newton-Raphson fails
         p_star = p_guess
-        for _ in range(self.max_iterations):
+        converged = False
+        
+        # Try Newton-Raphson first (fast when it works)
+        for iteration in range(self.max_iterations):
             f = pressure_function(p_star)
             if abs(f) < self.tolerance:
+                converged = True
                 break
+                
             df = pressure_derivative(p_star)
-            p_star = p_star - f / df
-            p_star = max(p_star, 0.01 * min(self.p_L, self.p_R))  # Prevent negative pressure
+            
+            # Check for small derivative (near-singular case)
+            if abs(df) < 1e-12:
+                break  # Fall back to bisection
+                
+            p_new = p_star - f / df
+            
+            # Check if Newton step stays within reasonable bounds
+            if p_new < 0.01 * min(self.p_L, self.p_R) or p_new > 100 * max(self.p_L, self.p_R):
+                break  # Fall back to bisection
+                
+            p_star = p_new
+        
+        # If Newton-Raphson failed, use bisection (slow but robust)
+        if not converged:
+            p_a, p_b = p_min, p_max
+            f_a = pressure_function(p_a)
+            
+            for iteration in range(self.max_iterations):
+                p_star = 0.5 * (p_a + p_b)
+                f = pressure_function(p_star)
+                
+                if abs(f) < self.tolerance or abs(p_b - p_a) < self.tolerance * p_star:
+                    break
+                    
+                if f * f_a > 0:
+                    p_a, f_a = p_star, f
+                else:
+                    p_b = p_star
         
         # Compute star velocity
         f_L = self._shock_rarefaction_function(p_star, self.rho_L, self.p_L, self.c_L)
+        f_R = self._shock_rarefaction_function(p_star, self.rho_R, self.p_R, self.c_R)
         u_star = 0.5 * (self.u_L + self.u_R) + 0.5 * (f_R - f_L)
         
         return p_star, u_star

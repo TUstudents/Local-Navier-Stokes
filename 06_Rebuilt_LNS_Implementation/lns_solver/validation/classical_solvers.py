@@ -152,12 +152,14 @@ class EulerSolver1D:
         except:
             return 1e-6
     
+    def _euler_rhs(self, Q: np.ndarray) -> np.ndarray:
+        """Compute Euler RHS efficiently (defined once, not per timestep)."""
+        return self.numerics.compute_hyperbolic_rhs_1d(Q, self.compute_euler_flux, self.grid.dx)
+    
     def take_time_step(self, dt: float) -> None:
-        """Take single time step using SSP-RK2."""
-        def euler_rhs(Q):
-            return self.numerics.compute_hyperbolic_rhs_1d(Q, self.compute_euler_flux, self.grid.dx)
-        
-        self.Q = self.numerics.ssp_rk2_step(self.Q, euler_rhs, dt)
+        """Take single time step using SSP-RK2 with optimized RHS."""
+        # Use pre-defined RHS function to avoid repeated function creation
+        self.Q = self.numerics.ssp_rk2_step(self.Q, self._euler_rhs, dt)
         self.t_current += dt
     
     def solve(self, t_final: float, cfl: float = 0.8) -> ClassicalSolution:
@@ -287,14 +289,19 @@ class NavierStokesSolver1D:
             'temperature': T
         }
     
-    def compute_viscous_flux(self, Q: np.ndarray) -> np.ndarray:
-        """Compute viscous flux terms."""
+    def compute_viscous_terms(self, Q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Compute viscous stress and heat flux using classical NSF relations.
+        
+        Returns:
+            Tuple of (viscous_stress, heat_flux) arrays
+        """
         try:
             primitives = self.get_primitive_variables()
             u = primitives['velocity']
             T = primitives['temperature']
         except:
-            return np.zeros_like(Q)
+            nx = Q.shape[0]
+            return np.zeros(nx), np.zeros(nx)
         
         # Compute gradients
         du_dx = np.gradient(u, self.grid.dx)
@@ -304,19 +311,52 @@ class NavierStokesSolver1D:
         sigma = (4.0/3.0) * self.mu * du_dx  # Viscous stress
         q = -self.k_thermal * dT_dx         # Heat flux
         
-        # Viscous flux contributions
-        F_viscous = np.zeros_like(Q)
-        F_viscous[:, 0] = 0                    # No mass flux
-        F_viscous[:, 1] = sigma                # Momentum flux
-        F_viscous[:, 2] = sigma * u + q        # Energy flux
+        return sigma, q
+    
+    def compute_viscous_source_terms(self, Q: np.ndarray) -> np.ndarray:
+        """Compute viscous source terms for conservative variables.
         
-        return F_viscous
+        This correctly implements the physics:
+        - Mass: no viscous source
+        - Momentum: ∂σ/∂x (viscous force)
+        - Energy: ∂(σu)/∂x - ∂q/∂x (viscous work - heat conduction)
+        
+        The key correction: ∂(σu)/∂x is viscous work (energy dissipation),
+        not a flux of a conserved quantity.
+        """
+        source = np.zeros_like(Q)
+        
+        try:
+            primitives = self.get_primitive_variables()
+            u = primitives['velocity']
+            
+            # Get viscous stress and heat flux
+            sigma, q = self.compute_viscous_terms(Q)
+            
+            # Source terms with CORRECT physics
+            source[:, 0] = 0                                    # Mass: no viscous source
+            source[:, 1] = np.gradient(sigma, self.grid.dx)      # Momentum: ∂σ/∂x
+            
+            # Energy: viscous work + heat conduction
+            # ∂(σu)/∂x = σ(∂u/∂x) + u(∂σ/∂x) - this is the CORRECT formulation
+            viscous_work = np.gradient(sigma * u, self.grid.dx)  # ∂(σu)/∂x (dissipation)
+            heat_conduction = -np.gradient(q, self.grid.dx)      # -∂q/∂x (heat diffusion)
+            source[:, 2] = viscous_work + heat_conduction
+            
+        except Exception as e:
+            logger.warning(f"Viscous source computation failed: {e}")
+            
+        return source
     
     def compute_ns_flux(self, Q_L: np.ndarray, Q_R: np.ndarray) -> np.ndarray:
-        """Compute Navier-Stokes flux (inviscid part only for interface)."""
-        # Use Euler flux for convective terms
-        # Viscous terms are handled as source terms
-        return EulerSolver1D.compute_euler_flux(self, Q_L, Q_R)
+        """Compute Navier-Stokes flux (inviscid part only for interface).
+        
+        For the corrected implementation, viscous terms are handled as source terms,
+        not as fluxes. Only the inviscid (Euler) part is computed at interfaces.
+        """
+        # Create temporary Euler solver for flux computation
+        euler_temp = EulerSolver1D(self.grid, self.gamma, self.R)
+        return euler_temp.compute_euler_flux(Q_L, Q_R)
     
     def compute_time_step(self, cfl: float = 0.5) -> float:
         """Compute stable time step including viscous constraints."""
@@ -340,22 +380,28 @@ class NavierStokesSolver1D:
         except:
             return 1e-8
     
+    def _convective_rhs(self, Q: np.ndarray) -> np.ndarray:
+        """Compute convective RHS efficiently (defined once, not per timestep)."""
+        return self.numerics.compute_hyperbolic_rhs_1d(Q, self.compute_ns_flux, self.grid.dx)
+    
     def take_time_step(self, dt: float) -> None:
-        """Take single time step with operator splitting."""
-        # Step 1: Convective terms (hyperbolic)
-        def convective_rhs(Q):
-            return self.numerics.compute_hyperbolic_rhs_1d(Q, self.compute_ns_flux, self.grid.dx)
+        """Take single time step with CORRECTED viscous term treatment.
         
-        Q_intermediate = self.numerics.ssp_rk2_step(self.Q, convective_rhs, dt)
+        This fixes the critical thermodynamics violation by properly treating
+        viscous work as energy dissipation, not energy transport.
+        """
+        # Step 1: Convective terms (hyperbolic) - optimized RHS
+        Q_intermediate = self.numerics.ssp_rk2_step(self.Q, self._convective_rhs, dt)
         
-        # Step 2: Viscous terms (parabolic) - explicit for simplicity
+        # Step 2: Viscous terms (parabolic) - CORRECTED implementation
         try:
             self.Q = Q_intermediate
-            F_viscous = self.compute_viscous_flux(self.Q)
             
-            # Add viscous contribution as source term
-            dF_dx = np.gradient(F_viscous, self.grid.dx, axis=0)
-            self.Q += dt * dF_dx
+            # Compute viscous source terms with CORRECT physics
+            viscous_source = self.compute_viscous_source_terms(self.Q)
+            
+            # Add viscous contribution as source terms (not flux divergence!)
+            self.Q += dt * viscous_source
             
         except Exception as e:
             logger.warning(f"Viscous step failed: {e}")

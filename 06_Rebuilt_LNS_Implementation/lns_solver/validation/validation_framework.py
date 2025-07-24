@@ -102,27 +102,39 @@ class ComparisonMetrics:
     @staticmethod
     def compute_convergence_rate(
         errors: List[float], 
-        grid_sizes: List[int]
+        grid_spacings: List[float]
     ) -> float:
         """
         Compute convergence rate from grid refinement study.
         
         Args:
-            errors: List of errors for different grid sizes
-            grid_sizes: Corresponding grid sizes
+            errors: List of errors for different grid resolutions
+            grid_spacings: Corresponding grid spacings (dx values)
             
         Returns:
-            Convergence rate p where error ~ h^p
+            Convergence rate p where error ~ dx^p
+            
+        Note: 
+            CORRECTED to use actual grid spacing dx, not 1/N.
+            Standard formulation: error ≈ C * dx^p
+            Therefore: log(error) = p * log(dx) + log(C)
         """
-        if len(errors) < 2 or len(errors) != len(grid_sizes):
+        if len(errors) < 2 or len(errors) != len(grid_spacings):
             return 0.0
         
-        # Convert to log scale
-        log_errors = np.log(errors)
-        log_h = np.log(1.0 / np.array(grid_sizes))  # h = 1/N
+        # Filter out non-positive errors and spacings
+        valid_pairs = [(e, h) for e, h in zip(errors, grid_spacings) if e > 0 and h > 0]
+        if len(valid_pairs) < 2:
+            return 0.0
         
-        # Linear fit: log(error) = p * log(h) + c
-        coeffs = np.polyfit(log_h, log_errors, 1)
+        errors_valid, spacings_valid = zip(*valid_pairs)
+        
+        # Convert to log scale - CORRECTED to use actual dx
+        log_errors = np.log(errors_valid)
+        log_dx = np.log(spacings_valid)  # Use actual grid spacing, not 1/N
+        
+        # Linear fit: log(error) = p * log(dx) + log(C)
+        coeffs = np.polyfit(log_dx, log_errors, 1)
         convergence_rate = coeffs[0]
         
         return convergence_rate
@@ -291,16 +303,20 @@ class ValidationSuite:
                 
                 results['error_metrics'][nx]['euler_density'] = euler_density_metrics
         
-        # Convergence analysis
+        # Convergence analysis - CORRECTED to use grid spacings
         if len(grid_sizes) >= 2:
             lns_l2_errors = [results['error_metrics'][nx]['lns_density']['l2_error'] 
                            for nx in grid_sizes]
             
+            # Compute actual grid spacings for convergence rate calculation
+            grid_spacings = [(x_bounds[1] - x_bounds[0]) / nx for nx in grid_sizes]
+            
             results['convergence_analysis'] = {
                 'lns_convergence_rate': ComparisonMetrics.compute_convergence_rate(
-                    lns_l2_errors, grid_sizes
+                    lns_l2_errors, grid_spacings  # CORRECTED: use dx not N
                 ),
-                'lns_l2_errors': lns_l2_errors
+                'lns_l2_errors': lns_l2_errors,
+                'grid_spacings': grid_spacings  # Store for reference
             }
         
         # Save results

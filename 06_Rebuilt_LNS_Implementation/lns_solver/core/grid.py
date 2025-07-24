@@ -141,6 +141,19 @@ class LNSGrid:
         self._compute_grid_metrics()
         
         logger.info(f"Created {ndim}D {grid_type} grid: {self._format_dimensions()}")
+    
+    @property
+    def total_cells(self) -> int:
+        """Total number of cells in the grid."""
+        return self.nx * (self.ny if self.ny > 0 else 1) * (self.nz if self.nz > 0 else 1)
+    
+    @property
+    def x_bounds(self) -> Tuple[float, float]:
+        """X-direction domain bounds."""
+        if self.nx > 0:
+            dx_half = self.dx / 2 if isinstance(self.dx, (int, float)) else self.dx[0] / 2
+            return (float(self.x[0] - dx_half), float(self.x[-1] + dx_half))
+        return (0.0, 0.0)
         
     def _validate_grid_data(self) -> None:
         """Validate grid coordinates and spacing data."""
