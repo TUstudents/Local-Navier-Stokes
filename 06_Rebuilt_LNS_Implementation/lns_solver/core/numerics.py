@@ -484,7 +484,7 @@ class LNSNumerics:
         dt: float
     ) -> np.ndarray:
         """
-        Strong Stability Preserving Runge-Kutta 2nd order time step.
+        Strong Stability Preserving Runge-Kutta 2nd order time step with positivity preservation.
         
         Args:
             Q_current: Current state
@@ -497,11 +497,55 @@ class LNSNumerics:
         # Stage 1: Forward Euler
         Q1 = Q_current + dt * rhs_function(Q_current)
         
+        # Apply positivity limiter to intermediate stage
+        Q1 = LNSNumerics._apply_positivity_limiter(Q1)
+        
         # Stage 2: Average with corrected step
         Q2 = Q1 + dt * rhs_function(Q1)
         Q_new = 0.5 * (Q_current + Q2)
         
+        # Apply positivity limiter to final result
+        Q_new = LNSNumerics._apply_positivity_limiter(Q_new)
+        
         return Q_new
+    
+    @staticmethod
+    def _apply_positivity_limiter(Q: np.ndarray) -> np.ndarray:
+        """
+        Apply positivity-preserving limiter to conserved variables.
+        
+        Ensures that density > 0 and internal energy > 0.
+        
+        Args:
+            Q: State array [N_cells, N_vars] where vars = [ρ, ρu, E, q, σ]
+            
+        Returns:
+            Limited state array with physical values
+        """
+        Q_limited = Q.copy()
+        
+        # Minimum values for stability (more aggressive)
+        rho_min = 1e-10
+        e_min = 1e-3  # Higher minimum energy for stability
+        
+        # Limit density
+        Q_limited[:, 0] = np.maximum(Q_limited[:, 0], rho_min)
+        
+        # Limit internal energy (total energy - kinetic energy > e_min)
+        rho = Q_limited[:, 0]
+        rho_u = Q_limited[:, 1]
+        E_total = Q_limited[:, 2]
+        
+        u = rho_u / rho  # Safe since rho > rho_min
+        kinetic_energy = 0.5 * rho * u**2
+        e_internal = E_total - kinetic_energy
+        
+        # If internal energy is too small, adjust total energy
+        mask = e_internal < e_min
+        if np.any(mask):
+            Q_limited[mask, 2] = kinetic_energy[mask] + e_min
+        
+        return Q_limited
     
     @staticmethod
     def compute_time_step_cfl(

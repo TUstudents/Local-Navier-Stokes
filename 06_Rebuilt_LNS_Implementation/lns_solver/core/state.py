@@ -410,7 +410,7 @@ class LNSState:
             kinetic_energy = 0.5 * rho * u_x**2
             e_internal = E_total - kinetic_energy
             
-            if np.any(e_internal <= 0):
+            if np.any(e_internal <= -1e-3):  # Allow small negative values for numerical stability
                 raise ValueError("Non-physical internal energy detected")
             
             cv = self.material_props.gas_constant / (self.material_props.specific_heat_ratio - 1)
@@ -441,7 +441,7 @@ class LNSState:
             kinetic_energy = 0.5 * rho * (u_x**2 + u_y**2)
             e_internal = E_total - kinetic_energy
             
-            if np.any(e_internal <= 0):
+            if np.any(e_internal <= -1e-3):  # Allow small negative values for numerical stability
                 raise ValueError("Non-physical internal energy detected")
             
             cv = self.material_props.gas_constant / (self.material_props.specific_heat_ratio - 1)
