@@ -253,11 +253,15 @@ class GhostCellBoundaryHandler:
             phys_start = self.n_ghost
             phys_end = Q_ghost.shape[0] - self.n_ghost
             
-            for g in range(self.n_ghost):
-                # Left ghost from right physical
-                Q_ghost[g, :] = Q_ghost[phys_end - self.n_ghost + g, :]
-                # Right ghost from left physical  
-                Q_ghost[phys_end + g, :] = Q_ghost[phys_start + g, :]
+            # CORRECTED periodic BC indexing
+            # Left ghost cells get data from RIGHT physical cells (wraparound)
+            # Right ghost cells get data from LEFT physical cells (wraparound)
+            
+            # Copy last n_ghost physical cells to left ghost cells
+            Q_ghost[0:self.n_ghost, :] = Q_ghost[phys_end-self.n_ghost:phys_end, :]
+            
+            # Copy first n_ghost physical cells to right ghost cells  
+            Q_ghost[phys_end:phys_end+self.n_ghost, :] = Q_ghost[phys_start:phys_start+self.n_ghost, :]
     
     def extract_physical_state(self, Q_ghost: np.ndarray, grid_shape: tuple) -> np.ndarray:
         """

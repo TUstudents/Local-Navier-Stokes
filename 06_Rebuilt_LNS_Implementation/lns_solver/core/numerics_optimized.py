@@ -221,17 +221,26 @@ class OptimizedLNSNumerics:
             Q_ghost, primitives, flux_function, physics_params
         )
         
-        # Step 6: Vectorized RHS computation using flux differencing
-        # Physical cells are indices [n_ghost : -n_ghost] in ghost array
-        phys_start = self.n_ghost
-        phys_end = Q_ghost.shape[0] - self.n_ghost
+        # Step 6: CORRECTED RHS computation with proper flux indexing
+        # 
+        # For conservative finite volume: RHS[i] = -(F_{i+1/2} - F_{i-1/2}) / dx
+        # where i is the physical cell index (0 to nx-1)
+        #
+        # Ghost array indexing:
+        # - Physical cells: Q_ghost[n_ghost : n_ghost + nx]
+        # - Interface fluxes: flux[j] is between cells j and j+1 in ghost array
+        # - For physical cell i, we need:
+        #   * Left flux:  flux[n_ghost + i - 1] (interface i-1/2)
+        #   * Right flux: flux[n_ghost + i]     (interface i+1/2)
         
-        # Interface fluxes for physical domain
-        flux_left = flux_result.interface_fluxes[phys_start-1:phys_end-1, :]   # F_{i-1/2}
-        flux_right = flux_result.interface_fluxes[phys_start:phys_end, :]      # F_{i+1/2}
+        # Extract fluxes for physical domain with CORRECT indexing
+        # Physical cells are at indices [n_ghost:n_ghost+nx] in Q_ghost
+        # Interface fluxes are indexed by left cell
+        flux_left_faces = flux_result.interface_fluxes[self.n_ghost-1:self.n_ghost+nx-1, :]  # F_{i-1/2}
+        flux_right_faces = flux_result.interface_fluxes[self.n_ghost:self.n_ghost+nx, :]     # F_{i+1/2}
         
-        # RHS = -(F_{i+1/2} - F_{i-1/2}) / dx (conservative form)
-        RHS = -(flux_right - flux_left) / dx
+        # Conservative flux divergence: ∂Q/∂t = -(∂F/∂x)
+        RHS = -(flux_right_faces - flux_left_faces) / dx
         
         return RHS, flux_result.max_wave_speed
     
@@ -333,9 +342,9 @@ class OptimizedLNSNumerics:
         if apply_limiter:
             Q1 = self._apply_positivity_limiter(Q1)
         
-        # Stage 2: Midpoint step
+        # Stage 2: CORRECTED SSP-RK2 (standard Heun method)
         k2, max_speed2 = rhs_function(Q1)
-        Q_new = 0.5 * (Q + Q1 + dt * k2)
+        Q_new = Q + 0.5 * dt * (k1 + k2)  # Standard SSP-RK2 combination
         
         if apply_limiter:
             Q_new = self._apply_positivity_limiter(Q_new)

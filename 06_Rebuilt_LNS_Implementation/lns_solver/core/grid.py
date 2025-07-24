@@ -355,67 +355,13 @@ class LNSGrid:
         """Get boundary condition for a region."""
         return self.boundary_conditions.get(region)
     
-    def apply_boundary_conditions(
-        self,
-        field: np.ndarray,
-        variable_name: str = 'default'
-    ) -> np.ndarray:
-        """
-        Apply boundary conditions to a field.
-        
-        Args:
-            field: Field array to apply BCs to
-            variable_name: Name of variable (for BC value lookup)
-            
-        Returns:
-            Field array with boundary conditions applied
-            
-        Note:
-            This is a simplified implementation. Real boundary condition
-            application depends on the specific discretization scheme.
-        """
-        field_bc = field.copy()
-        
-        if self.ndim == 1:
-            # Left boundary
-            if 'left' in self.boundary_conditions:
-                bc = self.boundary_conditions['left']
-                if bc.bc_type == 'dirichlet':
-                    field_bc[0] = bc.values
-                elif bc.bc_type == 'neumann':
-                    field_bc[0] = field_bc[1]  # Zero gradient approximation
-                elif bc.bc_type == 'periodic':
-                    field_bc[0] = field_bc[-1]
-                    
-            # Right boundary  
-            if 'right' in self.boundary_conditions:
-                bc = self.boundary_conditions['right']
-                if bc.bc_type == 'dirichlet':
-                    field_bc[-1] = bc.values
-                elif bc.bc_type == 'neumann':
-                    field_bc[-1] = field_bc[-2]
-                elif bc.bc_type == 'periodic':
-                    field_bc[-1] = field_bc[0]
-                    
-        elif self.ndim == 2:
-            # 2D boundary conditions (simplified)
-            field_2d = field_bc.reshape(self.nx, self.ny)
-            
-            # Apply BCs to boundaries
-            for region, bc in self.boundary_conditions.items():
-                if region == 'left':
-                    if bc.bc_type == 'dirichlet':
-                        field_2d[0, :] = bc.values
-                    elif bc.bc_type == 'no_slip' and variable_name in ['u_x', 'u_y']:
-                        field_2d[0, :] = 0.0
-                elif region == 'right':
-                    if bc.bc_type == 'outflow':
-                        field_2d[-1, :] = field_2d[-2, :]  # Zero gradient
-                # Add more boundary regions as needed
-                        
-            field_bc = field_2d.flatten()
-            
-        return field_bc
+    # REMOVED: apply_boundary_conditions method
+    # 
+    # This method was DANGEROUS because it directly modified physical cells,
+    # violating finite volume conservation principles. 
+    # 
+    # USE INSTEAD: GhostCellBoundaryHandler from boundary_conditions.py
+    # which correctly applies BCs to ghost cells only, preserving conservation.
     
     def get_neighbor_indices(self, i: int, j: int = 0, k: int = 0) -> Dict[str, Tuple[int, ...]]:
         """
