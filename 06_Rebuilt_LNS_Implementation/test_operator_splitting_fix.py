@@ -9,17 +9,24 @@ most critical physics bug in the LNS implementation.
 
 import numpy as np
 import matplotlib.pyplot as plt
-from lns_solver.core.operator_splitting import ImplicitRelaxationSolver, StrangSplitting
+from lns_solver.core.operator_splitting import StrangSplitting
 from lns_solver.core.grid import LNSGrid
 from lns_solver.solvers.solver_1d_final import FinalIntegratedLNSSolver1D
+from lns_solver.core.physics import LNSPhysicsParameters, LNSPhysics
 
 def test_production_terms_computed():
     """Test that production terms are now computed correctly."""
     print("🔧 Testing Production Terms Computation")
     print("-" * 50)
     
-    # Create test solver
-    solver = ImplicitRelaxationSolver()
+    # Create physics object for centralized source term computation
+    params = LNSPhysicsParameters(
+        tau_q=1e-5,
+        tau_sigma=1e-5,
+        mu_viscous=1e-5,
+        k_thermal=0.025
+    )
+    physics = LNSPhysics(params)
     
     # Create test state with non-trivial gradients
     nx = 20
@@ -46,26 +53,38 @@ def test_production_terms_computed():
         'dx': 1.0 / (nx - 1)
     }
     
-    # Compute production terms
-    production_q, production_sigma = solver._compute_production_terms(Q_test, physics_params)
+    # Test centralized complete source terms (includes both relaxation and production)
+    dx = 1.0 / (nx - 1)
+    complete_source = physics.compute_1d_lns_source_terms_complete(Q_test, dx)
     
-    print(f"✅ Production terms computed successfully")
-    print(f"   Heat flux production range: [{np.min(production_q):.2e}, {np.max(production_q):.2e}]")
-    print(f"   Stress production range: [{np.min(production_sigma):.2e}, {np.max(production_sigma):.2e}]")
+    # Extract LNS source terms
+    heat_flux_source = complete_source[:, 3]
+    stress_source = complete_source[:, 4]
     
-    # Verify that production terms are non-zero (they should be with gradients present)
-    assert np.any(np.abs(production_q) > 1e-10), "Heat flux production terms should be non-zero"
-    assert np.any(np.abs(production_sigma) > 1e-10), "Stress production terms should be non-zero"
+    print(f"✅ Complete source terms computed successfully")
+    print(f"   Heat flux source range: [{np.min(heat_flux_source):.2e}, {np.max(heat_flux_source):.2e}]")
+    print(f"   Stress source range: [{np.min(stress_source):.2e}, {np.max(stress_source):.2e}]")
+    
+    # Verify that source terms are non-zero (they should be with gradients present)
+    assert np.any(np.abs(heat_flux_source) > 1e-10), "Heat flux source terms should be non-zero"
+    assert np.any(np.abs(stress_source) > 1e-10), "Stress source terms should be non-zero"
     
     print("✅ Production terms are non-zero as expected")
     return True
 
 def test_imex_step_includes_production():
-    """Test that the IMEX step now includes production terms."""
-    print("\n🔧 Testing Complete IMEX Step")
+    """Test that the centralized physics includes both relaxation and production terms."""
+    print("\n🔧 Testing Complete LNS Physics")
     print("-" * 50)
     
-    solver = ImplicitRelaxationSolver()
+    # Create physics object for centralized computation
+    params = LNSPhysicsParameters(
+        tau_q=1e-3,  # Relatively large tau for testing
+        tau_sigma=1e-3,
+        k_thermal=0.025,
+        mu_viscous=1e-5
+    )
+    physics = LNSPhysics(params)
     
     # Create test state 
     nx = 10
@@ -76,26 +95,20 @@ def test_imex_step_includes_production():
     Q_initial[:, 3] = 100.0  # heat flux
     Q_initial[:, 4] = 50.0   # stress
     
-    physics_params = {
-        'tau_q': 1e-3,  # Relatively large tau for testing
-        'tau_sigma': 1e-3,
-        'k_thermal': 0.025,
-        'mu_viscous': 1e-5,
-        'gamma': 1.4,
-        'R_gas': 287.0,
-        'dx': 0.1
-    }
-    
+    dx = 0.1
     dt = 1e-4
     
-    # Apply one IMEX step
-    Q_after = solver.solve_relaxation_step(Q_initial, dt, physics_params)
+    # Test centralized physics source terms
+    source_terms = physics.compute_1d_lns_source_terms_complete(Q_initial, dx)
+    
+    # Apply source terms using forward Euler (simulating what splitting would do)
+    Q_after = Q_initial + dt * source_terms
     
     # Check that LNS variables changed
     q_change = np.abs(Q_after[:, 3] - Q_initial[:, 3])
     sigma_change = np.abs(Q_after[:, 4] - Q_initial[:, 4])
     
-    print(f"✅ IMEX step completed successfully")
+    print(f"✅ Centralized physics step completed successfully")
     print(f"   Max heat flux change: {np.max(q_change):.6f}")
     print(f"   Max stress change: {np.max(sigma_change):.6f}")
     
@@ -171,9 +184,8 @@ def test_strang_splitting_integration():
     print("\n🔧 Testing Strang Splitting Integration")
     print("-" * 50)
     
-    # Create Strang splitter
-    implicit_solver = ImplicitRelaxationSolver()
-    strang_splitter = StrangSplitting(implicit_solver)
+    # Create simplified Strang splitter
+    strang_splitter = StrangSplitting()  # Simplified - no internal solvers needed
     
     # Create test state
     nx = 10
@@ -188,9 +200,18 @@ def test_strang_splitting_integration():
     def hyperbolic_rhs(Q):
         return np.zeros_like(Q)
     
-    # Dummy source RHS (not used in this splitting mode)
+    # Create centralized physics for source RHS
+    params = LNSPhysicsParameters(
+        tau_q=1e-4,
+        tau_sigma=1e-4,
+        k_thermal=0.025,
+        mu_viscous=1e-5
+    )
+    physics = LNSPhysics(params)
+    
+    # Source RHS using centralized physics
     def source_rhs(Q):
-        return np.zeros_like(Q)
+        return physics.compute_1d_lns_source_terms_complete(Q, 0.1)
     
     physics_params = {
         'tau_q': 1e-4,

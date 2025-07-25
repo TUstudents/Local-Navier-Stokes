@@ -443,6 +443,121 @@ class LNSPhysics:
         
         return q_source, sigma_source
     
+    def compute_1d_lns_source_terms_complete(
+        self, 
+        Q: np.ndarray, 
+        dx: float,
+        gamma: float = 1.4,
+        R_gas: float = 287.0
+    ) -> np.ndarray:
+        """
+        Compute COMPLETE 1D LNS source terms including relaxation and all objective derivative production terms.
+        
+        This is the centralized, authoritative implementation of LNS physics that replaces
+        the scattered incomplete implementations throughout the codebase.
+        
+        Complete LNS source terms:
+        ∂q/∂t = -(q - q_NSF)/τ_q + PRODUCTION_TERMS  (MCV objective derivative)
+        ∂σ/∂t = -(σ - σ_NSF)/τ_σ + PRODUCTION_TERMS  (UCM objective derivative)
+        
+        Production terms are the essential viscoelastic physics from objective derivatives:
+        - MCV: u·∇q + (∇·u)q  (convective transport + compression coupling)  
+        - UCM: u·∇σ - 2σ(∂u/∂x)  (convective transport + stretching/compression)
+        
+        Args:
+            Q: Conservative state vector [ρ, mx, ET, qx, σxx] 
+            dx: Grid spacing
+            gamma: Specific heat ratio
+            R_gas: Gas constant
+            
+        Returns:
+            Complete source term vector (same shape as Q)
+            
+        Example:
+            >>> physics = LNSPhysics(params)
+            >>> Q = np.array([[1.0, 0.1, 250000, 100, 50]])  # 1 cell, 5 variables
+            >>> source = physics.compute_1d_lns_source_terms_complete(Q, 0.01)
+            >>> print(f"Complete heat flux source: {source[0, 3]:.3e}")
+        """
+        source = np.zeros_like(Q)
+        nx = Q.shape[0]
+        
+        # Only compute if LNS variables are present (5-variable system)
+        if Q.shape[1] < 5:
+            return source
+        
+        # === STEP 1: Compute primitive variables and their gradients ===
+        
+        # Convert to primitive variables
+        rho = np.maximum(Q[:, 0], 1e-12)  # Density (avoid division by zero)
+        u = Q[:, 1] / rho                 # Velocity
+        E = Q[:, 2]                       # Total energy
+        
+        # Compute temperature from thermodynamics
+        kinetic = 0.5 * rho * u**2
+        internal = E - kinetic
+        p = np.maximum((gamma - 1) * internal, 1e3)  # Pressure (avoid negative)
+        T = p / (rho * R_gas)  # Temperature
+        
+        # Current LNS variables
+        q_x = Q[:, 3]      # Heat flux in x-direction
+        sigma_xx = Q[:, 4] # Deviatoric stress component
+        
+        # Compute gradients using central differences
+        du_dx = np.gradient(u, dx)
+        dT_dx = np.gradient(T, dx)
+        dq_dx = np.gradient(q_x, dx)
+        dsigma_dx = np.gradient(sigma_xx, dx)
+        
+        # === STEP 2: Compute NSF targets ===
+        
+        # Create material properties dictionary
+        material_props = {
+            'k_thermal': self.params.k_thermal,
+            'mu_viscous': self.params.mu_viscous
+        }
+        
+        # Use the authoritative NSF target computation
+        q_nsf, sigma_nsf = self.compute_1d_nsf_targets(du_dx, dT_dx, material_props)
+        
+        # === STEP 3: Compute NON-STIFF production terms (essential viscoelastic physics) ===
+        
+        # MCV PRODUCTION TERMS (Heat flux objective derivative)
+        # From D_q/Dt = ∂q/∂t + u·∇q + (∇·u)q
+        # Production terms: u·∇q + (∇·u)q
+        production_q = u * dq_dx + du_dx * q_x
+        
+        # UCM PRODUCTION TERMS (Stress objective derivative)  
+        # From D_σ/Dt = ∂σ/∂t + u·∇σ - 2σ(∂u/∂x)
+        # Production terms: u·∇σ - 2σ(∂u/∂x)
+        # The factor of 2 comes from the full 1D UCM tensor contraction
+        production_sigma = u * dsigma_dx - 2.0 * sigma_xx * du_dx
+        
+        # === STEP 4: Compute STIFF relaxation terms ===
+        
+        # Relaxation source terms: -(current - NSF_target) / relaxation_time
+        relaxation_q = -(q_x - q_nsf) / self.params.tau_q
+        relaxation_sigma = -(sigma_xx - sigma_nsf) / self.params.tau_sigma
+        
+        # === STEP 5: Return the SUM of non-stiff and stiff parts ===
+        
+        # Mass conservation: no LNS source terms
+        source[:, 0] = 0.0
+        
+        # Momentum conservation: no LNS source terms (handled by pressure gradient)
+        source[:, 1] = 0.0
+        
+        # Energy conservation: no direct LNS source terms (coupled through heat flux)
+        source[:, 2] = 0.0
+        
+        # Heat flux evolution: COMPLETE equation (relaxation + production)
+        source[:, 3] = relaxation_q + production_q
+        
+        # Stress evolution: COMPLETE equation (relaxation + production)
+        source[:, 4] = relaxation_sigma + production_sigma
+        
+        return source
+    
     def get_physics_dict(self) -> Dict[str, float]:
         """
         Get physics parameters as dictionary for numerical methods.

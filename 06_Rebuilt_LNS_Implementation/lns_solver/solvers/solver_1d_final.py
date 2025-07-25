@@ -99,13 +99,14 @@ class FinalIntegratedLNSSolver1D:
         self.bc_handler = GhostCellBoundaryHandler(n_ghost)
         self._boundary_conditions = {}
         
-        # Operator splitting for stiff terms (CRITICAL FIX APPLIED)
+        # Operator splitting for stiff terms (SIMPLIFIED ARCHITECTURE)
         if use_operator_splitting:
+            # ARCHITECTURAL SIMPLIFICATION: Operator splitting now uses centralized physics
             self.operator_splitter = AdaptiveOperatorSplitting()
             # Pre-select timestep method to eliminate runtime branching
             self._timestep_method = self._apply_operator_splitting_step
-            logger.info("Operator splitting enabled with COMPLETE LNS physics")
-            logger.info("CRITICAL FIX: Now includes objective derivative production terms")
+            logger.info("Operator splitting enabled with simplified architecture")
+            logger.info("SIMPLIFIED: Direct orchestration of centralized physics calls")
         else:
             self.operator_splitter = None
             self._timestep_method = self._apply_direct_integration_step
@@ -354,11 +355,12 @@ class FinalIntegratedLNSSolver1D:
         # Create unified RHS functions for splitting
         def hyperbolic_rhs(Q_input: np.ndarray) -> np.ndarray:
             """Hyperbolic RHS using optimized numerics."""
-            return self._compute_hyperbolic_rhs_optimized(Q_input, physics_params)
+            rhs, _ = self._compute_hyperbolic_rhs_optimized(Q_input, physics_params)
+            return rhs
         
         def source_rhs(Q_input: np.ndarray) -> np.ndarray:
-            """Source RHS using named accessors."""
-            return self._compute_source_terms_with_accessors(Q_input, physics_params)
+            """Source RHS using centralized physics implementation."""
+            return self._compute_source_terms(Q_input, physics_params)
         
         # Apply adaptive operator splitting
         Q_new, diagnostics = self.operator_splitter.adaptive_step(
@@ -382,11 +384,11 @@ class FinalIntegratedLNSSolver1D:
         """Apply direct integration without operator splitting."""
         
         # Create unified RHS function
-        def unified_rhs(Q_input: np.ndarray) -> np.ndarray:
+        def unified_rhs(Q_input: np.ndarray) -> Tuple[np.ndarray, float]:
             """Unified RHS combining hyperbolic and source terms."""
-            hyp_rhs = self._compute_hyperbolic_rhs_optimized(Q_input, physics_params)
-            src_rhs = self._compute_source_terms_with_accessors(Q_input, physics_params)
-            return hyp_rhs + src_rhs  # Return combined RHS
+            hyp_rhs, max_wave_speed = self._compute_hyperbolic_rhs_optimized(Q_input, physics_params)
+            src_rhs = self._compute_source_terms(Q_input, physics_params)
+            return hyp_rhs + src_rhs, max_wave_speed  # Return combined RHS and wave speed
         
         # Use optimized SSP-RK2 (corrected implementation)
         Q_new = self.numerics.ssp_rk2_step_optimized(
@@ -400,7 +402,7 @@ class FinalIntegratedLNSSolver1D:
         self, 
         Q_input: np.ndarray, 
         physics_params: Dict
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, float]:
         """Compute hyperbolic RHS using optimized numerics with corrected flux computation."""
         
         # Use optimized flux function
@@ -416,59 +418,34 @@ class FinalIntegratedLNSSolver1D:
             self._boundary_conditions
         )
         
-        return rhs
+        return rhs, max_wave_speed
     
-    def _compute_source_terms_with_accessors(
-        self, 
-        Q_input: np.ndarray, 
-        physics_params: Dict
-    ) -> np.ndarray:
+    def _compute_source_terms(self, Q_input: np.ndarray, physics_params: Dict) -> np.ndarray:
         """
-        Compute source terms using direct NumPy operations (PERFORMANCE OPTIMIZED).
+        Compute COMPLETE LNS source terms using centralized physics implementation.
         
-        CRITICAL FIX: Eliminates expensive EnhancedLNSState object creation
-        that was happening on every timestep. Now operates directly on NumPy arrays.
+        ARCHITECTURAL REFACTOR: This method is now the single, unified interface for
+        all source term computations in the solver. It delegates to the authoritative
+        LNSPhysics.compute_1d_lns_source_terms_complete() method, ensuring:
+        
+        1. Complete physics (relaxation + production terms)
+        2. Consistency across all solver paths
+        3. Single source of truth for LNS physics
+        4. Elimination of code duplication
+        
+        Args:
+            Q_input: Conservative state vector
+            physics_params: Physics parameters (gamma, R_gas extracted automatically)
+            
+        Returns:
+            Complete source term vector with proper LNS physics
         """
-        source = np.zeros_like(Q_input)
-        
-        # Only compute if LNS variables are present
-        if not self.state_config.include_heat_flux and not self.state_config.include_stress:
-            return source
-        
-        # PERFORMANCE FIX: Direct primitive variable computation (no object instantiation)
-        primitives = self.numerics.compute_primitive_variables_vectorized(
-            Q_input,
+        return self.physics.compute_1d_lns_source_terms_complete(
+            Q_input, 
+            self.grid.dx,
             gamma=physics_params['gamma'],
             R_gas=physics_params['R_gas']
         )
-        
-        # Extract primitive variables directly from computed dict
-        u = primitives['velocity']
-        T = primitives['temperature']
-        
-        # Compute gradients using direct NumPy operations
-        du_dx = np.gradient(u, self.grid.dx)
-        dT_dx = np.gradient(T, self.grid.dx)
-        
-        # NSF targets using corrected formulas
-        k_thermal = physics_params['k_thermal']
-        mu_viscous = physics_params['mu_viscous']
-        
-        q_nsf = -k_thermal * dT_dx
-        sigma_nsf = (4.0/3.0) * mu_viscous * du_dx  # Correct 1D formula
-        
-        # Relaxation source terms using variable enum (not hardcoded indices)
-        if self.state_config.include_heat_flux:
-            q_x = Q_input[:, LNSVariables.HEAT_FLUX_X]  # Direct array access
-            tau_q = physics_params['tau_q']
-            source[:, LNSVariables.HEAT_FLUX_X] = -(q_x - q_nsf) / tau_q
-        
-        if self.state_config.include_stress:
-            sigma_xx = Q_input[:, LNSVariables.STRESS_XX]  # Direct array access
-            tau_sigma = physics_params['tau_sigma']
-            source[:, LNSVariables.STRESS_XX] = -(sigma_xx - sigma_nsf) / tau_sigma
-        
-        return source
     
     def _compute_adaptive_timestep(self) -> float:
         """Compute adaptive timestep using named accessors."""

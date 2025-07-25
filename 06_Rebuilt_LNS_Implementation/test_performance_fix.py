@@ -17,7 +17,7 @@ def test_performance_improvement():
     print("🚀 PERFORMANCE TEST: Source Term Computation Fix")
     print("=" * 60)
     print("Testing performance improvement from eliminating object instantiation")
-    print("in _compute_source_terms_with_accessors method")
+    print("in _compute_source_terms method")
     print("=" * 60)
     
     # Create test solver
@@ -50,7 +50,7 @@ def test_performance_improvement():
     
     start_time = time.time()
     for i in range(n_iterations):
-        source = solver._compute_source_terms_with_accessors(Q_test, physics_params)
+        source = solver._compute_source_terms(Q_test, physics_params)
     optimized_time = time.time() - start_time
     
     print(f"   Time for {n_iterations} iterations: {optimized_time:.4f} seconds")
@@ -153,7 +153,7 @@ def test_correctness_validation():
     
     # Compute source terms
     Q_test = solver.state.Q.copy()
-    source = solver._compute_source_terms_with_accessors(Q_test, physics_params)
+    source = solver._compute_source_terms(Q_test, physics_params)
     
     # Validate results
     print(f"   Grid size: {solver.grid.nx} cells")

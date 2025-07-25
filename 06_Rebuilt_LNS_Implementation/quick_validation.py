@@ -22,25 +22,33 @@ def quick_riemann_validation():
     print("-" * 40)
     
     nx = 100
-    t_final = 5e-4  # Much shorter time to avoid stiffness issues
+    # FIXED: Use shorter time to keep waves in domain
+    t_final = 1e-4  # Waves stay in domain, shock at ~0.607m
     
     # Create grid
     grid = LNSGrid.create_uniform_1d(nx, 0.0, 1.0)
     x = grid.x
     
+    print(f"Validation setup:")
+    print(f"  Domain: [0, 1] m, nx = {nx}")
+    print(f"  Simulation time: {t_final:.1e} s")
+    print(f"  Expected shock position: ~{0.5 + 1065.3 * t_final:.3f} m")
+    
     # LNS solver
     print("Running LNS solver...")
     lns_solver = FinalIntegratedLNSSolver1D.create_sod_shock_tube(nx=nx)
-    lns_results = lns_solver.solve(t_final=t_final, dt_initial=1e-8)
+    lns_results = lns_solver.solve(t_final=t_final, dt_initial=1e-6)
     lns_final = lns_results['output_data']['primitives'][-1]
     
-    # Analytical solution
+    # FIXED: Analytical solution with correct interface position
     print("Computing analytical solution...")
     riemann_solver = RiemannExactSolver(gamma=1.4)
+    # Shift coordinates so interface is at x=0 for analytical solver
+    x_shifted = x - 0.5  # LNS interface at x=0.5 → analytical interface at x=0
     analytical = riemann_solver.solve(
         rho_L=1.0, u_L=0.0, p_L=101325.0,
         rho_R=0.125, u_R=0.0, p_R=10132.5,
-        x=x, t=t_final
+        x=x_shifted, t=t_final  # Use shifted coordinates
     )
     
     # Euler reference

@@ -116,29 +116,25 @@ class OperatorSplittingBase(ABC):
 
 class StrangSplitting(OperatorSplittingBase):
     """
-    Strang (symmetric) operator splitting.
+    Simplified Strang (symmetric) operator splitting.
+    
+    ARCHITECTURAL SIMPLIFICATION: This class now simply orchestrates calls to the
+    centralized physics implementation rather than maintaining its own internal solver logic.
     
     2nd order accurate method: S(dt/2) + H(dt) + S(dt/2)
     
-    This is the most commonly used splitting method because:
-    1. It maintains 2nd order accuracy
-    2. It's symmetric (important for long-time integration)
-    3. It handles moderate stiffness well
-    
-    FIXED: Now properly uses the source_rhs function provided to step()
-    instead of ignoring it and using a hardcoded internal solver.
+    The complete LNS physics (relaxation + production terms) is handled by the
+    centralized LNSPhysics.compute_1d_lns_source_terms_complete() method.
     """
     
-    def __init__(self, implicit_solver: 'ImplicitRelaxationSolver' = None, use_advanced_source_solver: bool = False):
+    def __init__(self):
         """
-        Initialize Strang splitting.
+        Initialize simplified Strang splitting.
         
-        Args:
-            implicit_solver: Advanced solver for complex source terms (optional)
-            use_advanced_source_solver: If True, use internal solver instead of provided source_rhs
+        ARCHITECTURAL CHANGE: No longer needs internal solvers or configuration flags.
+        All physics is handled by the centralized implementation.
         """
-        self.implicit_solver = implicit_solver
-        self.use_advanced_source_solver = use_advanced_source_solver
+        pass
     
     def step(
         self,
@@ -149,46 +145,29 @@ class StrangSplitting(OperatorSplittingBase):
         physics_params: Dict
     ) -> np.ndarray:
         """
-        Strang splitting step: S(dt/2) + H(dt) + S(dt/2).
+        Simplified Strang splitting step: S(dt/2) + H(dt) + S(dt/2).
         
-        FIXED: Now properly uses the provided source_rhs function instead of
-        ignoring it and using hardcoded internal solver.
+        ARCHITECTURAL SIMPLIFICATION: This method now simply orchestrates calls to the
+        centralized physics implementation. All complex solver logic has been eliminated.
         
         Args:
             Q_current: Current state
             dt: Time step
             hyperbolic_rhs: Function for hyperbolic terms
-            source_rhs: Function for source terms (NOW ACTUALLY USED)
-            physics_params: Physics parameters
+            source_rhs: Function for complete source terms (from centralized physics)
+            physics_params: Physics parameters (unused, maintained for interface compatibility)
             
         Returns:
             Updated state after splitting step
         """
-        # Choose source term method based on configuration
-        if self.use_advanced_source_solver and self.implicit_solver is not None:
-            # Use advanced internal solver (for backward compatibility)
-            # Step 1: Advanced source terms for dt/2
-            Q_half = self.implicit_solver.solve_relaxation_step(
-                Q_current, dt/2, physics_params
-            )
-            
-            # Step 2: Hyperbolic terms for dt (explicit SSP-RK2)
-            Q_hyp = self._explicit_hyperbolic_step(Q_half, dt, hyperbolic_rhs)
-            
-            # Step 3: Advanced source terms for dt/2
-            Q_final = self.implicit_solver.solve_relaxation_step(
-                Q_hyp, dt/2, physics_params
-            )
-        else:
-            # FIXED: Use the provided source_rhs function (correct API behavior)
-            # Step 1: Source terms for dt/2 using PROVIDED source_rhs function
-            Q_half = self._apply_source_step(Q_current, dt/2, source_rhs)
-            
-            # Step 2: Hyperbolic terms for dt (explicit SSP-RK2)
-            Q_hyp = self._explicit_hyperbolic_step(Q_half, dt, hyperbolic_rhs)
-            
-            # Step 3: Source terms for dt/2 using PROVIDED source_rhs function
-            Q_final = self._apply_source_step(Q_hyp, dt/2, source_rhs)
+        # Step 1: Source terms for dt/2
+        Q_half = self._apply_source_step(Q_current, dt/2, source_rhs)
+        
+        # Step 2: Hyperbolic terms for dt (explicit SSP-RK2)
+        Q_hyp = self._explicit_hyperbolic_step(Q_half, dt, hyperbolic_rhs)
+        
+        # Step 3: Source terms for dt/2
+        Q_final = self._apply_source_step(Q_hyp, dt/2, source_rhs)
         
         return Q_final
     
@@ -199,23 +178,23 @@ class StrangSplitting(OperatorSplittingBase):
         source_rhs: Callable[[np.ndarray], np.ndarray]
     ) -> np.ndarray:
         """
-        Apply source terms using the provided source_rhs function.
+        Apply source terms using the centralized physics implementation.
         
-        This method properly uses the source_rhs function passed to the
-        step method, fixing the misleading API design.
+        ARCHITECTURAL SIMPLIFICATION: This method simply applies the complete LNS source terms
+        computed by the centralized physics implementation.
         
         Args:
             Q: Current state
             dt: Time step
-            source_rhs: Source term function provided by user
+            source_rhs: Complete source term function (from centralized physics)
             
         Returns:
             Updated state after source term application
         """
-        # Use the provided source_rhs function to compute source terms
+        # Compute complete source terms using centralized physics
         source_terms = source_rhs(Q)
         
-        # Apply source terms with forward Euler (can be enhanced to higher order)
+        # Apply source terms with forward Euler
         Q_updated = Q + dt * source_terms
         
         return Q_updated
@@ -238,174 +217,6 @@ class StrangSplitting(OperatorSplittingBase):
         return Q_new
 
 
-class ImplicitRelaxationSolver:
-    """
-    FIXED: IMEX solver for COMPLETE LNS source terms.
-    
-    Solves the FULL system including both relaxation AND production terms:
-    ∂q/∂t = -(q - q_NSF)/τ_q + PRODUCTION_TERMS(objective_derivatives)
-    ∂σ/∂t = -(σ - σ_NSF)/τ_σ + PRODUCTION_TERMS(objective_derivatives)
-    
-    CRITICAL FIX: This now includes the missing physics terms that were
-    completely dropped in the original implementation. The production terms
-    from objective derivatives are essential for correct viscoelastic behavior.
-    
-    Uses IMEX scheme:
-    - Relaxation terms: Implicit (exact solution for stiff terms)
-    - Production terms: Explicit (non-stiff, accurate for moderate CFL)
-    """
-    
-    def __init__(self):
-        """Initialize implicit relaxation solver."""
-        self.max_iterations = 50
-        self.tolerance = 1e-12
-    
-    def solve_relaxation_step(
-        self,
-        Q_input: np.ndarray,
-        dt: float,
-        physics_params: Dict
-    ) -> np.ndarray:
-        """
-        CRITICAL FIX: Solve COMPLETE LNS source terms using IMEX scheme.
-        
-        This now includes BOTH the relaxation terms AND the production terms
-        from objective derivatives that were previously dropped.
-        
-        IMEX Implementation:
-        1. Relaxation terms (stiff): Implicit exact solution
-        2. Production terms (non-stiff): Explicit Euler update
-        
-        Full equation solved:
-        ∂q/∂t = -(q - q_NSF)/τ_q + PRODUCTION_q
-        ∂σ/∂t = -(σ - σ_NSF)/τ_σ + PRODUCTION_σ
-        
-        Args:
-            Q_input: Input state
-            dt: Time step  
-            physics_params: Physics parameters
-            
-        Returns:
-            State after COMPLETE source term update
-        """
-        Q_output = Q_input.copy()
-        
-        # Extract relaxation parameters
-        tau_q = physics_params.get('tau_q', 1e-6)
-        tau_sigma = physics_params.get('tau_sigma', 1e-6)
-        
-        # Only update LNS variables if present
-        if Q_input.shape[1] < 5:
-            return Q_output  # No LNS variables to update
-        
-        # STEP 1: Compute production terms explicitly (CRITICAL FIX)
-        production_q, production_sigma = self._compute_production_terms(Q_input, physics_params)
-        
-        # STEP 2: Apply production terms explicitly (non-stiff part)
-        Q_with_production = Q_input.copy()
-        Q_with_production[:, 3] += dt * production_q  # Heat flux production
-        Q_with_production[:, 4] += dt * production_sigma  # Stress production
-        
-        # STEP 3: Apply relaxation terms implicitly (stiff part)
-        # Compute NSF targets based on updated state
-        q_nsf, sigma_nsf = self._compute_nsf_targets(Q_with_production, physics_params)
-        
-        # Current LNS variables after production update
-        q_current = Q_with_production[:, 3]
-        sigma_current = Q_with_production[:, 4]
-        
-        # Exact solution of linear relaxation ODEs
-        exp_factor_q = np.exp(-dt / tau_q)
-        exp_factor_sigma = np.exp(-dt / tau_sigma)
-        
-        Q_output[:, 3] = q_nsf + (q_current - q_nsf) * exp_factor_q
-        Q_output[:, 4] = sigma_nsf + (sigma_current - sigma_nsf) * exp_factor_sigma
-        
-        return Q_output
-    
-    def _compute_production_terms(
-        self,
-        Q: np.ndarray,
-        physics_params: Dict
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        CRITICAL FIX: Compute the missing production terms from objective derivatives.
-        
-        These are the NON-STIFF terms that were completely dropped in the original
-        implementation, causing physically incorrect results.
-        
-        For 1D case:
-        - Heat flux production: From MCV objective derivative D_q/Dt transport terms
-        - Stress production: From UCM objective derivative D_σ/Dt transport terms
-        
-        Returns:
-            Tuple of (production_q, production_sigma) source terms
-        """
-        # Convert to primitive variables
-        rho = np.maximum(Q[:, 0], 1e-12)
-        u = Q[:, 1] / rho
-        
-        # Current LNS variables
-        q_current = Q[:, 3]  # Heat flux
-        sigma_current = Q[:, 4]  # Deviatoric stress
-        
-        # Compute gradients
-        dx = physics_params.get('dx', 0.01)
-        du_dx = np.gradient(u, dx)
-        dq_dx = np.gradient(q_current, dx)
-        dsigma_dx = np.gradient(sigma_current, dx)
-        
-        # === MCV PRODUCTION TERMS (Heat flux) ===
-        # From objective derivative: D_q/Dt = ∂q/∂t + u·∇q + (∇·u)q
-        # Production terms: u·∇q + (∇·u)q
-        production_q = u * dq_dx + du_dx * q_current
-        
-        # === UCM PRODUCTION TERMS (Stress) ===
-        # From objective derivative: D_σ/Dt = ∂σ/∂t + u·∇σ - 2σ(∂u/∂x)
-        # Production terms: u·∇σ - 2σ(∂u/∂x)
-        # The factor of 2 comes from the full 1D UCM tensor contraction
-        production_sigma = u * dsigma_dx - 2.0 * sigma_current * du_dx
-        
-        return production_q, production_sigma
-    
-    def _compute_nsf_targets(
-        self,
-        Q: np.ndarray,
-        physics_params: Dict
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Compute NSF target values for relaxation.
-        
-        This requires computing gradients from the current state.
-        """
-        # Convert to primitive variables
-        rho = np.maximum(Q[:, 0], 1e-12)
-        u = Q[:, 1] / rho
-        E = Q[:, 2]
-        
-        # Compute temperature
-        gamma = physics_params.get('gamma', 1.4)
-        R = physics_params.get('R_gas', 287.0)
-        
-        kinetic = 0.5 * rho * u**2
-        internal = E - kinetic
-        p = np.maximum((gamma - 1) * internal, 1e3)
-        T = p / (rho * R)
-        
-        # Compute gradients (assumes uniform spacing)
-        dx = physics_params.get('dx', 0.01)
-        du_dx = np.gradient(u, dx)
-        dT_dx = np.gradient(T, dx)
-        
-        # NSF targets
-        k_thermal = physics_params.get('k_thermal', 0.025)
-        mu_viscous = physics_params.get('mu_viscous', 1e-5)
-        
-        q_nsf = -k_thermal * dT_dx
-        sigma_nsf = (4.0/3.0) * mu_viscous * du_dx  # Correct 1D formula
-        
-        return q_nsf, sigma_nsf
-
 
 class AdaptiveOperatorSplitting:
     """
@@ -413,20 +224,18 @@ class AdaptiveOperatorSplitting:
     based on stiffness analysis.
     """
     
-    def __init__(self, use_advanced_source_solver: bool = True):
+    def __init__(self, use_advanced_source_solver: bool = False):
         """
         Initialize adaptive splitting.
         
+        ARCHITECTURAL SIMPLIFICATION: Now uses simplified StrangSplitting that delegates
+        to centralized physics implementation.
+        
         Args:
-            use_advanced_source_solver: If True, use advanced internal solver (backward compatibility)
-                                      If False, use provided source_rhs function (corrected API)
+            use_advanced_source_solver: Maintained for interface compatibility (ignored)
         """
         self.stiffness_detector = StiffnessDetector()
-        self.implicit_solver = ImplicitRelaxationSolver()
-        self.strang_splitter = StrangSplitting(
-            self.implicit_solver, 
-            use_advanced_source_solver=use_advanced_source_solver
-        )
+        self.strang_splitter = StrangSplitting()  # Simplified - no internal solvers needed
         
         # Performance tracking
         self.method_usage_count = {method: 0 for method in SplittingMethod}

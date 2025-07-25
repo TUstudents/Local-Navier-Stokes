@@ -7,7 +7,7 @@ and that the source_rhs function provided to step() is now actually used.
 """
 
 import numpy as np
-from lns_solver.core.operator_splitting import StrangSplitting, ImplicitRelaxationSolver, AdaptiveOperatorSplitting
+from lns_solver.core.operator_splitting import StrangSplitting, AdaptiveOperatorSplitting
 
 def test_source_rhs_actually_used():
     """Test that the provided source_rhs function is actually used."""
@@ -55,11 +55,8 @@ def test_source_rhs_actually_used():
     
     print("Testing FIXED operator splitting (use_advanced_source_solver=False):")
     
-    # Test with FIXED API (should use provided source_rhs)
-    splitter_fixed = StrangSplitting(
-        implicit_solver=ImplicitRelaxationSolver(),
-        use_advanced_source_solver=False  # Use provided source_rhs
-    )
+    # Test with simplified API (should use provided source_rhs)
+    splitter_fixed = StrangSplitting()  # Simplified - always uses provided source_rhs
     
     # Reset flags
     source_rhs_called = False
@@ -90,43 +87,15 @@ def test_source_rhs_actually_used():
     print(f"   Max heat flux change: {heat_flux_change:.6f}")
     print(f"   Max stress change: {stress_change:.6f}")
     
-    # Test backward compatibility (should NOT call provided source_rhs)
-    print(f"\nTesting backward compatibility (use_advanced_source_solver=True):")
+    # Simplified architecture always uses provided source_rhs
+    print(f"\nARCHITECTURAL SIMPLIFICATION: No backward compatibility modes needed")
+    print(f"Simplified architecture always uses provided source_rhs function")
     
-    splitter_compat = StrangSplitting(
-        implicit_solver=ImplicitRelaxationSolver(),
-        use_advanced_source_solver=True  # Use internal solver, ignore source_rhs
-    )
+    # Validation: Check that the simplified API works correctly
+    api_works = fixed_called_source and fixed_call_count > 0  # Should call source_rhs
+    state_modified = heat_flux_changed and stress_changed  # Should modify state
     
-    # Reset flags
-    source_rhs_called = False
-    source_rhs_call_count = 0
-    
-    Q_result_compat = splitter_compat.step(
-        Q_test.copy(), dt, dummy_hyperbolic_rhs, custom_source_rhs, physics_params
-    )
-    
-    print(f"   Custom source_rhs called: {'❌' if not source_rhs_called else '✅'} (should be ❌)")
-    print(f"   Call count: {source_rhs_call_count} (expected: 0 for backward compatibility)")
-    print(f"   Result shape: {Q_result_compat.shape}")
-    
-    # Store results from compat test
-    compat_called_source = source_rhs_called
-    compat_call_count = source_rhs_call_count
-    
-    # Both modes should still modify the state (just using different source terms)
-    heat_flux_changed_compat = not np.allclose(Q_result_compat[:, 3], Q_test[:, 3])
-    stress_changed_compat = not np.allclose(Q_result_compat[:, 4], Q_test[:, 4])
-    
-    print(f"   Heat flux modified: {'✅' if heat_flux_changed_compat else '❌'}")
-    print(f"   Stress modified: {'✅' if stress_changed_compat else '❌'}")
-    
-    # Validation: Check that the fix works correctly
-    fixed_api_works = fixed_called_source and fixed_call_count > 0  # Fixed version should call source_rhs
-    compat_api_works = not compat_called_source and compat_call_count == 0  # Compat should not call source_rhs
-    both_modify_state = heat_flux_changed and heat_flux_changed_compat  # Both should modify state
-    
-    return fixed_api_works and compat_api_works and both_modify_state
+    return api_works and state_modified
 
 def test_adaptive_splitting_integration():
     """Test that AdaptiveOperatorSplitting works with the API fix."""
@@ -169,10 +138,10 @@ def test_adaptive_splitting_integration():
         hyperbolic_calls += 1
         return np.zeros_like(Q)
     
-    print("Testing with corrected API (use_advanced_source_solver=False):")
+    print("Testing with simplified API:")
     
-    # Test corrected API
-    adaptive_fixed = AdaptiveOperatorSplitting(use_advanced_source_solver=False)
+    # Test simplified API
+    adaptive_fixed = AdaptiveOperatorSplitting()  # Simplified - always uses provided source_rhs
     
     source_calls = 0
     hyperbolic_calls = 0
@@ -189,36 +158,10 @@ def test_adaptive_splitting_integration():
     source_used = source_calls > 0
     print(f"   Provided source_rhs used: {'✅' if source_used else '❌'}")
     
-    print(f"\nTesting backward compatibility (use_advanced_source_solver=True):")
+    print(f"\nARCHITECTURAL SIMPLIFICATION: Simplified adaptive splitting")
+    print(f"No backward compatibility modes - always uses provided source_rhs")
     
-    # Test backward compatibility
-    adaptive_compat = AdaptiveOperatorSplitting(use_advanced_source_solver=True)
-    
-    source_calls = 0
-    hyperbolic_calls = 0
-    
-    Q_result_compat, diagnostics_compat = adaptive_compat.adaptive_step(
-        Q_test.copy(), dt, tracked_hyperbolic_rhs, tracked_source_rhs, physics_params
-    )
-    
-    print(f"   Method used: {diagnostics_compat['method_used']}")
-    print(f"   Source RHS calls: {source_calls}")
-    print(f"   Hyperbolic RHS calls: {hyperbolic_calls}")
-    print(f"   Splitting required: {diagnostics_compat['splitting_required']}")
-    
-    # In backward compatibility mode, source_rhs should be ignored when splitting is used
-    if diagnostics_compat['splitting_required']:
-        # When splitting is required, backward compat should ignore source_rhs
-        source_properly_ignored = source_calls == 0
-        print(f"   Source_rhs properly ignored (splitting mode): {'✅' if source_properly_ignored else '❌'}")
-        compat_result = source_properly_ignored
-    else:
-        # When no splitting required, both modes use explicit method with source_rhs
-        source_used_when_appropriate = source_calls > 0
-        print(f"   Source_rhs used (explicit method): {'✅' if source_used_when_appropriate else '❌'}")
-        compat_result = source_used_when_appropriate
-    
-    return source_used and compat_result
+    return source_used  # Only need to check that it uses the provided function
 
 def main():
     """Run all operator splitting API fix tests."""
