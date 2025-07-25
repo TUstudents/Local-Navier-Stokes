@@ -124,16 +124,21 @@ class StrangSplitting(OperatorSplittingBase):
     1. It maintains 2nd order accuracy
     2. It's symmetric (important for long-time integration)
     3. It handles moderate stiffness well
+    
+    FIXED: Now properly uses the source_rhs function provided to step()
+    instead of ignoring it and using a hardcoded internal solver.
     """
     
-    def __init__(self, implicit_solver: 'ImplicitRelaxationSolver'):
+    def __init__(self, implicit_solver: 'ImplicitRelaxationSolver' = None, use_advanced_source_solver: bool = False):
         """
         Initialize Strang splitting.
         
         Args:
-            implicit_solver: Solver for implicit source term updates
+            implicit_solver: Advanced solver for complex source terms (optional)
+            use_advanced_source_solver: If True, use internal solver instead of provided source_rhs
         """
         self.implicit_solver = implicit_solver
+        self.use_advanced_source_solver = use_advanced_source_solver
     
     def step(
         self,
@@ -146,30 +151,74 @@ class StrangSplitting(OperatorSplittingBase):
         """
         Strang splitting step: S(dt/2) + H(dt) + S(dt/2).
         
+        FIXED: Now properly uses the provided source_rhs function instead of
+        ignoring it and using hardcoded internal solver.
+        
         Args:
             Q_current: Current state
             dt: Time step
             hyperbolic_rhs: Function for hyperbolic terms
-            source_rhs: Function for source terms
+            source_rhs: Function for source terms (NOW ACTUALLY USED)
             physics_params: Physics parameters
             
         Returns:
             Updated state after splitting step
         """
-        # Step 1: COMPLETE source terms for dt/2 (IMEX: production + relaxation)
-        Q_half = self.implicit_solver.solve_relaxation_step(
-            Q_current, dt/2, physics_params
-        )
-        
-        # Step 2: Hyperbolic terms for dt (explicit SSP-RK2)
-        Q_hyp = self._explicit_hyperbolic_step(Q_half, dt, hyperbolic_rhs)
-        
-        # Step 3: COMPLETE source terms for dt/2 (IMEX: production + relaxation)
-        Q_final = self.implicit_solver.solve_relaxation_step(
-            Q_hyp, dt/2, physics_params
-        )
+        # Choose source term method based on configuration
+        if self.use_advanced_source_solver and self.implicit_solver is not None:
+            # Use advanced internal solver (for backward compatibility)
+            # Step 1: Advanced source terms for dt/2
+            Q_half = self.implicit_solver.solve_relaxation_step(
+                Q_current, dt/2, physics_params
+            )
+            
+            # Step 2: Hyperbolic terms for dt (explicit SSP-RK2)
+            Q_hyp = self._explicit_hyperbolic_step(Q_half, dt, hyperbolic_rhs)
+            
+            # Step 3: Advanced source terms for dt/2
+            Q_final = self.implicit_solver.solve_relaxation_step(
+                Q_hyp, dt/2, physics_params
+            )
+        else:
+            # FIXED: Use the provided source_rhs function (correct API behavior)
+            # Step 1: Source terms for dt/2 using PROVIDED source_rhs function
+            Q_half = self._apply_source_step(Q_current, dt/2, source_rhs)
+            
+            # Step 2: Hyperbolic terms for dt (explicit SSP-RK2)
+            Q_hyp = self._explicit_hyperbolic_step(Q_half, dt, hyperbolic_rhs)
+            
+            # Step 3: Source terms for dt/2 using PROVIDED source_rhs function
+            Q_final = self._apply_source_step(Q_hyp, dt/2, source_rhs)
         
         return Q_final
+    
+    def _apply_source_step(
+        self,
+        Q: np.ndarray,
+        dt: float,
+        source_rhs: Callable[[np.ndarray], np.ndarray]
+    ) -> np.ndarray:
+        """
+        Apply source terms using the provided source_rhs function.
+        
+        This method properly uses the source_rhs function passed to the
+        step method, fixing the misleading API design.
+        
+        Args:
+            Q: Current state
+            dt: Time step
+            source_rhs: Source term function provided by user
+            
+        Returns:
+            Updated state after source term application
+        """
+        # Use the provided source_rhs function to compute source terms
+        source_terms = source_rhs(Q)
+        
+        # Apply source terms with forward Euler (can be enhanced to higher order)
+        Q_updated = Q + dt * source_terms
+        
+        return Q_updated
     
     def _explicit_hyperbolic_step(
         self,
@@ -364,11 +413,20 @@ class AdaptiveOperatorSplitting:
     based on stiffness analysis.
     """
     
-    def __init__(self):
-        """Initialize adaptive splitting."""
+    def __init__(self, use_advanced_source_solver: bool = True):
+        """
+        Initialize adaptive splitting.
+        
+        Args:
+            use_advanced_source_solver: If True, use advanced internal solver (backward compatibility)
+                                      If False, use provided source_rhs function (corrected API)
+        """
         self.stiffness_detector = StiffnessDetector()
         self.implicit_solver = ImplicitRelaxationSolver()
-        self.strang_splitter = StrangSplitting(self.implicit_solver)
+        self.strang_splitter = StrangSplitting(
+            self.implicit_solver, 
+            use_advanced_source_solver=use_advanced_source_solver
+        )
         
         # Performance tracking
         self.method_usage_count = {method: 0 for method in SplittingMethod}
