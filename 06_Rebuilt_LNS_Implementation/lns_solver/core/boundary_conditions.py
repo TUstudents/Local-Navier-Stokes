@@ -157,15 +157,23 @@ class GhostCellBoundaryHandler:
             dx: Grid spacing
             primitive_vars: Pre-computed primitive variables for efficiency
         """
-        # Left boundary
-        if 'left' in self.boundary_conditions:
-            bc = self.boundary_conditions['left']
-            self._apply_left_bc_1d(Q_ghost, bc, dx, primitive_vars)
+        # CRITICAL FIX: Handle periodic boundaries first (must be applied to both ends together)
+        left_bc = self.boundary_conditions.get('left')
+        right_bc = self.boundary_conditions.get('right')
         
-        # Right boundary  
-        if 'right' in self.boundary_conditions:
-            bc = self.boundary_conditions['right']
-            self._apply_right_bc_1d(Q_ghost, bc, dx, primitive_vars)
+        if (left_bc and left_bc.bc_type == BCType.PERIODIC and
+            right_bc and right_bc.bc_type == BCType.PERIODIC):
+            # Apply periodic BC to both ends together
+            self.apply_periodic_bc_1d(Q_ghost)
+        else:
+            # Apply individual boundary conditions
+            if 'left' in self.boundary_conditions:
+                bc = self.boundary_conditions['left']
+                self._apply_left_bc_1d(Q_ghost, bc, dx, primitive_vars)
+            
+            if 'right' in self.boundary_conditions:
+                bc = self.boundary_conditions['right']
+                self._apply_right_bc_1d(Q_ghost, bc, dx, primitive_vars)
     
     def _apply_left_bc_1d(
         self,
