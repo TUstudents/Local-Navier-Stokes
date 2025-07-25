@@ -23,20 +23,32 @@ class BCType(Enum):
     OUTFLOW = "outflow"
     PERIODIC = "periodic"
     WALL = "wall"
+    ISOTHERMAL_WALL = "isothermal_wall"  # Fixed temperature wall
+    ADIABATIC_WALL = "adiabatic_wall"    # Zero heat flux wall
+    MOVING_WALL = "moving_wall"          # Wall with specified velocity
     INFLOW = "inflow"
 
 
 @dataclass
 class BoundaryCondition:
     """
-    Boundary condition specification.
+    ENHANCED boundary condition specification with complete wall support.
     
     For ghost cell-based FVM, the BC is applied to ghost cells
     to ensure proper flux computation at boundaries.
+    
+    Supports:
+    - Isothermal walls: Fixed temperature T_wall
+    - Adiabatic walls: Zero heat flux ∂T/∂n = 0
+    - Moving walls: Specified wall velocity u_wall
+    - Mixed thermal/velocity conditions
     """
     bc_type: BCType
-    values: Optional[Union[float, np.ndarray]] = None
+    values: Optional[Union[float, np.ndarray, Dict[str, float]]] = None
     gradient: Optional[float] = None  # For Neumann BCs
+    wall_temperature: Optional[float] = None  # For isothermal walls
+    wall_velocity: Optional[float] = None     # For moving walls
+    thermal_condition: Optional[str] = None   # 'isothermal' or 'adiabatic'
     
     def __post_init__(self):
         """Validate BC specification."""
@@ -44,6 +56,22 @@ class BoundaryCondition:
             raise ValueError(f"{self.bc_type} BC requires values")
         if self.bc_type == BCType.NEUMANN and self.gradient is None:
             raise ValueError("Neumann BC requires gradient")
+        if self.bc_type == BCType.ISOTHERMAL_WALL and self.wall_temperature is None:
+            raise ValueError("Isothermal wall BC requires wall_temperature")
+        if self.bc_type == BCType.MOVING_WALL and self.wall_velocity is None:
+            raise ValueError("Moving wall BC requires wall_velocity")
+        
+        # Set defaults for wall conditions
+        if self.bc_type in [BCType.WALL, BCType.ISOTHERMAL_WALL, BCType.ADIABATIC_WALL, BCType.MOVING_WALL]:
+            if self.wall_velocity is None:
+                self.wall_velocity = 0.0  # Stationary wall by default
+            if self.thermal_condition is None:
+                if self.bc_type == BCType.ISOTHERMAL_WALL:
+                    self.thermal_condition = 'isothermal'
+                elif self.bc_type == BCType.ADIABATIC_WALL:
+                    self.thermal_condition = 'adiabatic'
+                else:
+                    self.thermal_condition = 'adiabatic'  # Default for generic WALL
 
 
 class GhostCellBoundaryHandler:
@@ -180,17 +208,114 @@ class GhostCellBoundaryHandler:
                     if Q_ghost.shape[1] > 3:
                         Q_ghost[g, 3:] = Q_ghost[phys_start, 3:]
                         
-        elif bc.bc_type == BCType.WALL:
-            # No-slip wall: reflect velocity, extrapolate other quantities
-            for g in range(self.n_ghost):
-                Q_ghost[g, :] = Q_ghost[phys_start, :]
-                # Reflect velocity component
-                if Q_ghost[g, 0] > 0:
-                    Q_ghost[g, 1] = -Q_ghost[g, 1]  # Reflect momentum
+        elif bc.bc_type in [BCType.WALL, BCType.ISOTHERMAL_WALL, BCType.ADIABATIC_WALL, BCType.MOVING_WALL]:
+            # COMPLETE wall boundary condition implementation
+            self._apply_wall_bc_left(Q_ghost, bc, phys_start)
                     
         elif bc.bc_type == BCType.PERIODIC:
             # Will be handled in pair with right boundary
             pass
+    
+    def _apply_wall_bc_left(
+        self, 
+        Q_ghost: np.ndarray, 
+        bc: BoundaryCondition, 
+        phys_start: int
+    ) -> None:
+        """
+        COMPLETE wall boundary condition implementation for left boundary.
+        
+        Supports:
+        - Isothermal walls: T_ghost = 2*T_wall - T_phys (linear interpolation)
+        - Adiabatic walls: T_ghost = T_phys (zero gradient)
+        - Moving walls: u_ghost = 2*u_wall - u_phys (enforce wall velocity)
+        - Stationary walls: u_ghost = -u_phys (no-slip, u=0 at interface)
+        
+        Args:
+            Q_ghost: Ghost state array
+            bc: Boundary condition specification
+            phys_start: Index of first physical cell
+        """
+        for g in range(self.n_ghost):
+            # Start with physical cell data
+            Q_ghost[g, :] = Q_ghost[phys_start, :]
+            
+            # Extract physical state
+            rho_phys = Q_ghost[phys_start, 0]
+            if rho_phys <= 0:
+                continue  # Skip invalid cells
+                
+            u_phys = Q_ghost[phys_start, 1] / rho_phys
+            E_phys = Q_ghost[phys_start, 2]
+            
+            # === VELOCITY BOUNDARY CONDITION ===
+            wall_velocity = bc.wall_velocity if bc.wall_velocity is not None else 0.0
+            
+            if wall_velocity == 0.0:
+                # Stationary wall: enforce u = 0 at interface
+                # Ghost cell velocity: u_ghost = -u_phys (reflection)
+                u_ghost = -u_phys
+            else:
+                # Moving wall: enforce u = u_wall at interface
+                # Ghost cell velocity: u_ghost = 2*u_wall - u_phys
+                u_ghost = 2.0 * wall_velocity - u_phys
+            
+            # Update momentum in ghost cell
+            Q_ghost[g, 1] = rho_phys * u_ghost
+            
+            # === THERMAL BOUNDARY CONDITION ===
+            thermal_condition = getattr(bc, 'thermal_condition', 'adiabatic')
+            
+            if thermal_condition == 'isothermal' and bc.wall_temperature is not None:
+                # Isothermal wall: enforce T = T_wall at interface
+                # Ghost temperature: T_ghost = 2*T_wall - T_phys
+                
+                # Compute physical temperature
+                gamma = PhysicalConstants.AIR_SPECIFIC_HEAT_RATIO
+                R = PhysicalConstants.AIR_GAS_CONSTANT
+                kinetic_phys = 0.5 * rho_phys * u_phys**2
+                internal_phys = E_phys - kinetic_phys
+                p_phys = (gamma - 1) * internal_phys
+                T_phys = p_phys / (rho_phys * R)
+                
+                # Ghost temperature for isothermal BC
+                T_ghost = 2.0 * bc.wall_temperature - T_phys
+                T_ghost = max(T_ghost, 0.1 * bc.wall_temperature)  # Prevent negative T
+                
+                # Recompute ghost energy with isothermal temperature
+                p_ghost = rho_phys * R * T_ghost
+                internal_ghost = p_ghost / (gamma - 1)
+                kinetic_ghost = 0.5 * rho_phys * u_ghost**2
+                E_ghost = internal_ghost + kinetic_ghost
+                
+                Q_ghost[g, 2] = E_ghost
+                
+            else:
+                # Adiabatic wall: zero temperature gradient (∂T/∂n = 0)
+                # Ghost temperature: T_ghost = T_phys (simple extrapolation)
+                # Energy needs to account for different velocity
+                kinetic_phys = 0.5 * rho_phys * u_phys**2
+                kinetic_ghost = 0.5 * rho_phys * u_ghost**2
+                internal_energy = E_phys - kinetic_phys  # Extract internal energy
+                E_ghost = internal_energy + kinetic_ghost  # Recompute total energy
+                
+                Q_ghost[g, 2] = E_ghost
+            
+            # === LNS VARIABLES (if present) ===
+            if Q_ghost.shape[1] > 3:
+                # Heat flux and stress: depends on thermal condition
+                if thermal_condition == 'isothermal':
+                    # For isothermal wall, heat flux may be non-zero
+                    # Extrapolate from physical cell for now
+                    Q_ghost[g, 3:] = Q_ghost[phys_start, 3:]
+                else:
+                    # For adiabatic wall, heat flux should be zero at wall
+                    # Set ghost heat flux to enforce zero flux at interface
+                    if Q_ghost.shape[1] > 3:
+                        Q_ghost[g, 3] = -Q_ghost[phys_start, 3]  # Reflect heat flux
+                    if Q_ghost.shape[1] > 4:
+                        # Stress: extrapolate (stress is non-zero at walls)
+                        Q_ghost[g, 4:] = Q_ghost[phys_start, 4:]
     
     def _apply_right_bc_1d(
         self,
@@ -231,13 +356,101 @@ class GhostCellBoundaryHandler:
                     if Q_ghost.shape[1] > 3:
                         Q_ghost[ghost_idx, 3:] = Q_ghost[phys_end, 3:]
                         
-        elif bc.bc_type == BCType.WALL:
-            # No-slip wall
-            for g in range(self.n_ghost):
-                ghost_idx = Q_ghost.shape[0] - 1 - g
-                Q_ghost[ghost_idx, :] = Q_ghost[phys_end, :]
-                if Q_ghost[ghost_idx, 0] > 0:
-                    Q_ghost[ghost_idx, 1] = -Q_ghost[ghost_idx, 1]
+        elif bc.bc_type in [BCType.WALL, BCType.ISOTHERMAL_WALL, BCType.ADIABATIC_WALL, BCType.MOVING_WALL]:
+            # COMPLETE wall boundary condition implementation
+            self._apply_wall_bc_right(Q_ghost, bc, phys_end)
+    
+    def _apply_wall_bc_right(
+        self, 
+        Q_ghost: np.ndarray, 
+        bc: BoundaryCondition, 
+        phys_end: int
+    ) -> None:
+        """
+        COMPLETE wall boundary condition implementation for right boundary.
+        
+        Mirrors the left boundary implementation with appropriate indexing.
+        
+        Args:
+            Q_ghost: Ghost state array
+            bc: Boundary condition specification
+            phys_end: Index of last physical cell
+        """
+        for g in range(self.n_ghost):
+            ghost_idx = Q_ghost.shape[0] - 1 - g
+            
+            # Start with physical cell data
+            Q_ghost[ghost_idx, :] = Q_ghost[phys_end, :]
+            
+            # Extract physical state
+            rho_phys = Q_ghost[phys_end, 0]
+            if rho_phys <= 0:
+                continue
+                
+            u_phys = Q_ghost[phys_end, 1] / rho_phys
+            E_phys = Q_ghost[phys_end, 2]
+            
+            # === VELOCITY BOUNDARY CONDITION ===
+            wall_velocity = bc.wall_velocity if bc.wall_velocity is not None else 0.0
+            
+            if wall_velocity == 0.0:
+                # Stationary wall: enforce u = 0 at interface
+                u_ghost = -u_phys
+            else:
+                # Moving wall: enforce u = u_wall at interface
+                u_ghost = 2.0 * wall_velocity - u_phys
+            
+            # Update momentum in ghost cell
+            Q_ghost[ghost_idx, 1] = rho_phys * u_ghost
+            
+            # === THERMAL BOUNDARY CONDITION ===
+            thermal_condition = getattr(bc, 'thermal_condition', 'adiabatic')
+            
+            if thermal_condition == 'isothermal' and bc.wall_temperature is not None:
+                # Isothermal wall: enforce T = T_wall at interface
+                
+                # Compute physical temperature
+                gamma = PhysicalConstants.AIR_SPECIFIC_HEAT_RATIO
+                R = PhysicalConstants.AIR_GAS_CONSTANT
+                kinetic_phys = 0.5 * rho_phys * u_phys**2
+                internal_phys = E_phys - kinetic_phys
+                p_phys = (gamma - 1) * internal_phys
+                T_phys = p_phys / (rho_phys * R)
+                
+                # Ghost temperature for isothermal BC
+                T_ghost = 2.0 * bc.wall_temperature - T_phys
+                T_ghost = max(T_ghost, 0.1 * bc.wall_temperature)  # Prevent negative T
+                
+                # Recompute ghost energy with isothermal temperature
+                p_ghost = rho_phys * R * T_ghost
+                internal_ghost = p_ghost / (gamma - 1)
+                kinetic_ghost = 0.5 * rho_phys * u_ghost**2
+                E_ghost = internal_ghost + kinetic_ghost
+                
+                Q_ghost[ghost_idx, 2] = E_ghost
+                
+            else:
+                # Adiabatic wall: zero temperature gradient
+                kinetic_phys = 0.5 * rho_phys * u_phys**2
+                kinetic_ghost = 0.5 * rho_phys * u_ghost**2
+                internal_energy = E_phys - kinetic_phys
+                E_ghost = internal_energy + kinetic_ghost
+                
+                Q_ghost[ghost_idx, 2] = E_ghost
+            
+            # === LNS VARIABLES (if present) ===
+            if Q_ghost.shape[1] > 3:
+                # Heat flux and stress: depends on thermal condition
+                if thermal_condition == 'isothermal':
+                    # For isothermal wall, heat flux may be non-zero
+                    Q_ghost[ghost_idx, 3:] = Q_ghost[phys_end, 3:]
+                else:
+                    # For adiabatic wall, heat flux should be zero at wall
+                    if Q_ghost.shape[1] > 3:
+                        Q_ghost[ghost_idx, 3] = -Q_ghost[phys_end, 3]  # Reflect heat flux
+                    if Q_ghost.shape[1] > 4:
+                        # Stress: extrapolate (stress is non-zero at walls)
+                        Q_ghost[ghost_idx, 4:] = Q_ghost[phys_end, 4:]
     
     def apply_periodic_bc_1d(self, Q_ghost: np.ndarray) -> None:
         """Apply periodic boundary conditions to both ends."""
@@ -288,8 +501,77 @@ def create_outflow_bc() -> BoundaryCondition:
 
 
 def create_wall_bc() -> BoundaryCondition:
-    """Create no-slip wall boundary condition.""" 
-    return BoundaryCondition(BCType.WALL)
+    """Create basic adiabatic, stationary wall boundary condition.""" 
+    return BoundaryCondition(
+        BCType.ADIABATIC_WALL,
+        wall_velocity=0.0,
+        thermal_condition='adiabatic'
+    )
+
+
+def create_isothermal_wall_bc(wall_temperature: float, wall_velocity: float = 0.0) -> BoundaryCondition:
+    """
+    Create isothermal wall boundary condition.
+    
+    Args:
+        wall_temperature: Fixed temperature at the wall [K]
+        wall_velocity: Wall velocity (0.0 for stationary wall) [m/s]
+        
+    Returns:
+        Isothermal wall boundary condition
+    """
+    return BoundaryCondition(
+        BCType.ISOTHERMAL_WALL,
+        wall_temperature=wall_temperature,
+        wall_velocity=wall_velocity,
+        thermal_condition='isothermal'
+    )
+
+
+def create_adiabatic_wall_bc(wall_velocity: float = 0.0) -> BoundaryCondition:
+    """
+    Create adiabatic wall boundary condition.
+    
+    Args:
+        wall_velocity: Wall velocity (0.0 for stationary wall) [m/s]
+        
+    Returns:
+        Adiabatic wall boundary condition with zero heat flux
+    """
+    return BoundaryCondition(
+        BCType.ADIABATIC_WALL,
+        wall_velocity=wall_velocity,
+        thermal_condition='adiabatic'
+    )
+
+
+def create_moving_wall_bc(
+    wall_velocity: float, 
+    thermal_condition: str = 'adiabatic',
+    wall_temperature: Optional[float] = None
+) -> BoundaryCondition:
+    """
+    Create moving wall boundary condition.
+    
+    Args:
+        wall_velocity: Wall velocity [m/s]
+        thermal_condition: 'adiabatic' or 'isothermal'
+        wall_temperature: Fixed temperature if isothermal [K]
+        
+    Returns:
+        Moving wall boundary condition
+    """
+    bc_type = BCType.ISOTHERMAL_WALL if thermal_condition == 'isothermal' else BCType.MOVING_WALL
+    
+    if thermal_condition == 'isothermal' and wall_temperature is None:
+        raise ValueError("Isothermal moving wall requires wall_temperature")
+    
+    return BoundaryCondition(
+        bc_type,
+        wall_velocity=wall_velocity,
+        wall_temperature=wall_temperature,
+        thermal_condition=thermal_condition
+    )
 
 
 def create_temperature_bc(temperature: float) -> BoundaryCondition:
