@@ -1,14 +1,15 @@
 """
-Optimized Numerical Methods for LNS Solver.
+Numerical Methods for 1D LNS Solver.
 
-This module provides high-performance numerical methods that eliminate
-redundant computations and use proper FVM ghost cell handling.
+This module implements finite volume numerical methods for the 1D LNS equations:
+- HLL approximate Riemann solver for interface fluxes
+- SSP-RK2 time integration
+- Vectorized operations for computational efficiency
 
-Key optimizations:
-1. Vectorized flux computation with pre-computed primitive variables
-2. Elimination of redundant Q->P conversions in hot loops
-3. Proper ghost cell-based boundary treatment
-4. Efficient flux differencing for RHS computation
+The methods use standard finite volume techniques with some optimizations
+for reducing redundant primitive variable calculations.
+
+Note: These are simplified 1D implementations suitable for research prototypes.
 """
 
 import numpy as np
@@ -34,13 +35,16 @@ class FluxComputationResult:
 
 class OptimizedLNSNumerics:
     """
-    High-performance numerical methods for LNS equations.
+    Numerical methods for 1D LNS finite volume solver.
     
-    This class implements optimized algorithms that:
-    - Pre-compute primitive variables once per time step
-    - Use vectorized operations wherever possible
-    - Properly handle ghost cells for boundary conditions
-    - Minimize redundant calculations in hot loops
+    Implements standard finite volume methods with some computational optimizations:
+    - Vectorized primitive variable calculations
+    - HLL flux approximation for interfaces
+    - SSP-RK2 time stepping
+    - Ghost cell boundary treatment
+    
+    These methods are designed for 1D research applications and may not be
+    suitable for production computational fluid dynamics.
     """
     
     def __init__(self, n_ghost: int = 2):

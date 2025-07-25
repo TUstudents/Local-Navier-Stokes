@@ -1,19 +1,23 @@
 """
-LNS Physics: Correct Local Navier-Stokes physics implementation.
+Local Navier-Stokes Physics Models.
 
-This module provides the LNSPhysics class with mathematically correct formulations
-of the Local Navier-Stokes equations, including proper deviatoric stress targets
-and complete objective derivatives.
+This module implements simplified 1D versions of LNS constitutive equations:
+- Maxwell-Cattaneo-Vernotte (MCV) model for heat flux
+- Upper Convected Maxwell (UCM) model for viscous stress
+
+The physics models include:
+- Navier-Stokes-Fourier (NSF) target calculations
+- Relaxation source terms with finite relaxation times
+- Simplified objective derivative approximations for 1D
+
+Limitations:
+- 1D simplification of 3D tensor equations
+- Approximate treatment of objective derivatives
+- Research implementation - not fully validated
 
 Example:
-    Compute corrected 1D NSF targets:
-    
-    >>> physics = LNSPhysics()
-    >>> du_dx = 0.1  # velocity gradient
-    >>> dT_dx = -10.0  # temperature gradient
-    >>> material_props = {'mu_viscous': 1e-3, 'k_thermal': 0.025}
-    >>> q_nsf, sigma_nsf = physics.compute_1d_nsf_targets(du_dx, dT_dx, material_props)
-    >>> print(f"Correct deviatoric stress: {sigma_nsf:.6f}")
+    >>> physics = LNSPhysics(LNSPhysicsParameters(tau_q=1e-5, tau_sigma=1e-5))
+    >>> # Compute source terms for current state
 """
 
 from typing import Dict, List, Optional, Tuple, Union
@@ -451,18 +455,20 @@ class LNSPhysics:
         R_gas: float = 287.0
     ) -> np.ndarray:
         """
-        Compute COMPLETE 1D LNS source terms including relaxation and all objective derivative production terms.
+        Compute 1D LNS source terms including relaxation and simplified production terms.
         
-        This is the centralized, authoritative implementation of LNS physics that replaces
-        the scattered incomplete implementations throughout the codebase.
+        Implements source terms for the 1D LNS system using simplified approximations
+        of the Maxwell-Cattaneo-Vernotte and Upper Convected Maxwell models.
         
-        Complete LNS source terms:
-        ∂q/∂t = -(q - q_NSF)/τ_q + PRODUCTION_TERMS  (MCV objective derivative)
-        ∂σ/∂t = -(σ - σ_NSF)/τ_σ + PRODUCTION_TERMS  (UCM objective derivative)
+        Source term structure:
+        ∂q/∂t = -(q - q_NSF)/τ_q + production_terms  (simplified MCV model)
+        ∂σ/∂t = -(σ - σ_NSF)/τ_σ + production_terms  (simplified UCM model)
         
-        Production terms are the essential viscoelastic physics from objective derivatives:
-        - MCV: u·∇q + (∇·u)q  (convective transport + compression coupling)  
-        - UCM: u·∇σ - 2σ(∂u/∂x)  (convective transport + stretching/compression)
+        Production terms (1D approximations):
+        - MCV: u·∇q + (∇·u)q  (convective transport + dilatation)  
+        - UCM: u·∇σ - 2σ(∂u/∂x)  (convective transport + stretching)
+        
+        Note: These are 1D simplifications of full 3D tensor objective derivatives.
         
         Args:
             Q: Conservative state vector [ρ, mx, ET, qx, σxx] 

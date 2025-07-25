@@ -1,15 +1,19 @@
 """
-LNS Solver: Professional Local Navier-Stokes Implementation
+LNS Solver: Research Implementation of Local Navier-Stokes Equations
 
-A research-grade implementation of Local Navier-Stokes equations with 
-rigorous physics validation and proven accuracy.
+A prototype implementation of Local Navier-Stokes equations for research
+and educational purposes, focusing on 1D finite volume methods.
 
-Key Features:
-- Correct physics implementation with proper deviatoric stress formula
-- Complete objective derivatives for 2D flows
-- Rigorous validation against analytical solutions
-- High-performance O(N²) algorithms
-- Professional software engineering practices
+Features:
+- 1D finite volume solver with HLL flux computation
+- Simplified Maxwell-Cattaneo-Vernotte and Upper Convected Maxwell models
+- Basic validation against analytical Riemann solutions
+- Standard numerical methods (SSP-RK2, ghost cells)
+
+Limitations:
+- 1D simplification of 3D tensor physics
+- Research prototype - not validated for production use
+- Simplified constitutive models
 
 Example:
     Basic 1D shock tube simulation:

@@ -1,14 +1,16 @@
 """
-Enhanced LNS State Management with Named Accessors.
+LNS State Management with Named Variable Access.
 
-This module provides an enhanced state class that eliminates hardcoded indices
-and provides professional property access for LNS variables.
+This module provides a state class with named accessors for LNS variables,
+replacing hardcoded array indices with enumerated constants.
 
-Key improvements:
-- Named properties for all state variables
-- Type-safe variable access
-- Clear variable organization
-- Easy extension for new physics models
+Features:
+- Named constants for state variable indices
+- Property-based access to conserved variables
+- State initialization methods for common test cases
+- Basic variable organization for 1D LNS system
+
+The state vector contains: [density, momentum, total_energy, heat_flux, stress]
 """
 
 import numpy as np
