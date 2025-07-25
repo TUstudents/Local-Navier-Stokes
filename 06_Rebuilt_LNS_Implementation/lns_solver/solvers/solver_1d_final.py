@@ -423,22 +423,30 @@ class FinalIntegratedLNSSolver1D:
         Q_input: np.ndarray, 
         physics_params: Dict
     ) -> np.ndarray:
-        """Compute source terms using named accessors (no hardcoded indices)."""
+        """
+        Compute source terms using direct NumPy operations (PERFORMANCE OPTIMIZED).
+        
+        CRITICAL FIX: Eliminates expensive EnhancedLNSState object creation
+        that was happening on every timestep. Now operates directly on NumPy arrays.
+        """
         source = np.zeros_like(Q_input)
         
         # Only compute if LNS variables are present
         if not self.state_config.include_heat_flux and not self.state_config.include_stress:
             return source
         
-        # Create temporary enhanced state for named access
-        temp_state = EnhancedLNSState(self.grid, self.state_config)
-        temp_state.Q = Q_input.copy()
+        # PERFORMANCE FIX: Direct primitive variable computation (no object instantiation)
+        primitives = self.numerics.compute_primitive_variables_vectorized(
+            Q_input,
+            gamma=physics_params['gamma'],
+            R_gas=physics_params['R_gas']
+        )
         
-        # Use named accessors instead of hardcoded indices
-        u = temp_state.velocity_x
-        T = temp_state.temperature
+        # Extract primitive variables directly from computed dict
+        u = primitives['velocity']
+        T = primitives['temperature']
         
-        # Compute gradients
+        # Compute gradients using direct NumPy operations
         du_dx = np.gradient(u, self.grid.dx)
         dT_dx = np.gradient(T, self.grid.dx)
         
@@ -451,12 +459,12 @@ class FinalIntegratedLNSSolver1D:
         
         # Relaxation source terms using variable enum (not hardcoded indices)
         if self.state_config.include_heat_flux:
-            q_x = temp_state.heat_flux_x
+            q_x = Q_input[:, LNSVariables.HEAT_FLUX_X]  # Direct array access
             tau_q = physics_params['tau_q']
             source[:, LNSVariables.HEAT_FLUX_X] = -(q_x - q_nsf) / tau_q
         
         if self.state_config.include_stress:
-            sigma_xx = temp_state.stress_xx
+            sigma_xx = Q_input[:, LNSVariables.STRESS_XX]  # Direct array access
             tau_sigma = physics_params['tau_sigma']
             source[:, LNSVariables.STRESS_XX] = -(sigma_xx - sigma_nsf) / tau_sigma
         
