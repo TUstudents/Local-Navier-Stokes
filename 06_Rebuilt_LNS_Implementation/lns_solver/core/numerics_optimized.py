@@ -328,7 +328,11 @@ class OptimizedLNSNumerics:
         apply_limiter: bool = True
     ) -> np.ndarray:
         """
-        Optimized SSP-RK2 time step with optional positivity limiting.
+        Strong Stability Preserving (SSP) RK2 time step with optional positivity limiting.
+        
+        Implements the TRUE SSP-RK2 formula: Q_new = 0.5*Q + 0.5*(Q1 + dt*k2)
+        This ensures Total Variation Diminishing (TVD) properties and prevents 
+        spurious oscillations that can occur with standard RK2 methods.
         
         Args:
             Q: Current state
@@ -337,7 +341,7 @@ class OptimizedLNSNumerics:
             apply_limiter: Whether to apply positivity preservation
             
         Returns:
-            Updated state after RK2 step
+            Updated state after SSP-RK2 step
         """
         # Stage 1: Forward Euler step
         k1, max_speed1 = rhs_function(Q)
@@ -346,9 +350,9 @@ class OptimizedLNSNumerics:
         if apply_limiter:
             Q1 = self._apply_positivity_limiter(Q1)
         
-        # Stage 2: CORRECTED SSP-RK2 (standard Heun method)
+        # Stage 2: CORRECTED SSP-RK2 (Heun's method - proper TVD/SSP formula)
         k2, max_speed2 = rhs_function(Q1)
-        Q_new = Q + 0.5 * dt * (k1 + k2)  # Standard SSP-RK2 combination
+        Q_new = 0.5 * Q + 0.5 * (Q1 + dt * k2)  # TRUE SSP-RK2 formula
         
         if apply_limiter:
             Q_new = self._apply_positivity_limiter(Q_new)
