@@ -10,15 +10,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from lns_solver.solvers.solver_1d import LNSSolver1D
+from lns_solver.solvers.solver_1d_final import FinalIntegratedLNSSolver1D
 from lns_solver.validation.analytical_solutions import RiemannExactSolver
 from lns_solver.validation.classical_solvers import EulerSolver1D
 from lns_solver.core.grid import LNSGrid, BoundaryCondition
 from lns_solver.core.physics import LNSPhysicsParameters, LNSPhysics
-from lns_solver.core.numerics import LNSNumerics
+from lns_solver.core.numerics_optimized import OptimizedLNSNumerics
 
 
-def create_stable_lns_solver(nx: int = 100) -> LNSSolver1D:
+def create_stable_lns_solver(nx: int = 100) -> FinalIntegratedLNSSolver1D:
     """Create LNS solver with non-stiff parameters."""
     
     # Create grid with outflow boundary conditions
@@ -46,9 +46,11 @@ def create_stable_lns_solver(nx: int = 100) -> LNSSolver1D:
     )
     
     physics = LNSPhysics(physics_params)
-    numerics = LNSNumerics()
+    numerics = OptimizedLNSNumerics()
     
-    solver = LNSSolver1D(grid, physics, numerics)
+    solver = FinalIntegratedLNSSolver1D(
+        grid, physics, n_ghost=2, use_operator_splitting=True
+    )
     solver.state.initialize_sod_shock_tube()
     
     print(f"Stable solver parameters:")
@@ -225,9 +227,11 @@ def test_parameter_scaling():
                 tau_sigma=tau
             )
             physics = LNSPhysics(physics_params)
-            numerics = LNSNumerics()
+            numerics = OptimizedLNSNumerics()
             
-            solver = LNSSolver1D(grid, physics, numerics)
+            solver = FinalIntegratedLNSSolver1D(
+                grid, physics, n_ghost=2, use_operator_splitting=True
+            )
             solver.state.initialize_sod_shock_tube()
             
             # Run simulation

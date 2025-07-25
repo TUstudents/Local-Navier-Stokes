@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple, Callable
 import logging
 
 from lns_solver.core.grid import LNSGrid
-from lns_solver.core.numerics import LNSNumerics
+from lns_solver.core.numerics_optimized import OptimizedLNSNumerics
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class EulerSolver1D:
         self.grid = grid
         self.gamma = gamma
         self.R = R
-        self.numerics = LNSNumerics()
+        self.numerics = OptimizedLNSNumerics()
         
         # State vector: [ρ, ρu, E]
         self.Q = np.zeros((grid.nx, 3))
@@ -154,12 +154,12 @@ class EulerSolver1D:
     
     def _euler_rhs(self, Q: np.ndarray) -> np.ndarray:
         """Compute Euler RHS efficiently (defined once, not per timestep)."""
-        return self.numerics.compute_hyperbolic_rhs_1d(Q, self.compute_euler_flux, self.grid.dx)
+        return self.numerics.compute_hyperbolic_rhs_1d_optimized(Q, self.compute_euler_flux, self.grid.dx, {})
     
     def take_time_step(self, dt: float) -> None:
         """Take single time step using SSP-RK2 with optimized RHS."""
         # Use pre-defined RHS function to avoid repeated function creation
-        self.Q = self.numerics.ssp_rk2_step(self.Q, self._euler_rhs, dt)
+        self.Q = self.numerics.ssp_rk2_step_optimized(self.Q, self._euler_rhs, dt)
         self.t_current += dt
     
     def solve(self, t_final: float, cfl: float = 0.8) -> ClassicalSolution:
@@ -226,7 +226,7 @@ class NavierStokesSolver1D:
         self.R = R
         self.mu = mu
         self.k_thermal = k_thermal
-        self.numerics = LNSNumerics()
+        self.numerics = OptimizedLNSNumerics()
         
         # State vector: [ρ, ρu, E]
         self.Q = np.zeros((grid.nx, 3))
@@ -391,7 +391,7 @@ class NavierStokesSolver1D:
         viscous work as energy dissipation, not energy transport.
         """
         # Step 1: Convective terms (hyperbolic) - optimized RHS
-        Q_intermediate = self.numerics.ssp_rk2_step(self.Q, self._convective_rhs, dt)
+        Q_intermediate = self.numerics.ssp_rk2_step_optimized(self.Q, self._convective_rhs, dt)
         
         # Step 2: Viscous terms (parabolic) - CORRECTED implementation
         try:

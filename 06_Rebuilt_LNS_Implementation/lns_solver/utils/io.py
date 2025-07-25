@@ -5,14 +5,16 @@ This module provides classes for reading and writing LNS simulation data
 in various formats (HDF5, NetCDF, VTK).
 """
 
-from typing import Dict, List, Optional, Union, Any, Tuple
+from typing import Dict, List, Optional, Union, Any, Tuple, TYPE_CHECKING
 import numpy as np
 import h5py
 from pathlib import Path
 import logging
 
 from lns_solver.core.grid import LNSGrid
-from lns_solver.core.state import LNSState
+
+if TYPE_CHECKING:
+    from lns_solver.core.state_enhanced import EnhancedLNSState
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,7 @@ class LNSDataWriter:
     def write_state(
         self,
         filename: Union[str, Path],
-        state: LNSState,
+        state: "EnhancedLNSState",
         time: float = 0.0,
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
@@ -71,7 +73,7 @@ class LNSDataWriter:
     def _write_hdf5(
         self,
         filename: Path,
-        state: LNSState,
+        state: "EnhancedLNSState",
         time: float,
         metadata: Optional[Dict[str, Any]]
     ) -> None:
@@ -133,7 +135,7 @@ class LNSDataWriter:
     def _write_vtk(
         self,
         filename: Path,
-        state: LNSState,
+        state: "EnhancedLNSState",
         time: float,
         metadata: Optional[Dict[str, Any]]
     ) -> None:
@@ -176,7 +178,7 @@ class LNSDataWriter:
     def _write_csv(
         self,
         filename: Path,
-        state: LNSState,
+        state: "EnhancedLNSState",
         time: float,
         metadata: Optional[Dict[str, Any]]
     ) -> None:
@@ -226,7 +228,7 @@ class LNSDataReader:
     """
     Data reader for LNS simulation results.
     
-    Supports reading from multiple formats to reconstruct LNSState objects.
+    Supports reading from multiple formats to reconstruct EnhancedLNSState objects.
     """
     
     def __init__(self):
@@ -237,7 +239,7 @@ class LNSDataReader:
         self,
         filename: Union[str, Path],
         grid: Optional[LNSGrid] = None
-    ) -> Tuple[LNSState, float, Dict[str, Any]]:
+    ) -> Tuple["EnhancedLNSState", float, Dict[str, Any]]:
         """
         Read state data from file.
         
@@ -261,7 +263,7 @@ class LNSDataReader:
         self,
         filename: Path,
         grid: Optional[LNSGrid]
-    ) -> Tuple[LNSState, float, Dict[str, Any]]:
+    ) -> Tuple["EnhancedLNSState", float, Dict[str, Any]]:
         """Read data from HDF5 format."""
         with h5py.File(filename, 'r') as f:
             # Read grid if not provided
@@ -293,7 +295,8 @@ class LNSDataReader:
             Q_data = state_group['Q'][:]
             
             # Create state object
-            state = LNSState(grid, n_variables)
+            from lns_solver.core.state_enhanced import EnhancedLNSState
+            state = EnhancedLNSState(grid)
             state.Q = Q_data
             
             # Read metadata
@@ -310,7 +313,7 @@ class LNSDataReader:
         self,
         filename: Path,
         grid: Optional[LNSGrid]
-    ) -> Tuple[LNSState, float, Dict[str, Any]]:
+    ) -> Tuple["EnhancedLNSState", float, Dict[str, Any]]:
         """Read data from CSV format (basic implementation)."""
         # This is a simplified CSV reader
         logger.warning("CSV reader is basic - may not handle all cases")
@@ -327,8 +330,9 @@ class LNSDataReader:
                 raise ValueError("Cannot reconstruct grid from CSV - please provide grid")
         
         # Create state (this is simplified and may not work for all cases)
+        from lns_solver.core.state_enhanced import EnhancedLNSState
         n_variables = 5 if grid.ndim == 1 else (9 if grid.ndim == 2 else 13)
-        state = LNSState(grid, n_variables)
+        state = EnhancedLNSState(grid)
         
         # This would need proper implementation based on CSV format
         logger.warning("CSV state reconstruction not fully implemented")

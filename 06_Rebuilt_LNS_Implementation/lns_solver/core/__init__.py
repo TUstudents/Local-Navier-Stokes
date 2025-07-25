@@ -15,13 +15,18 @@ All core classes follow professional software engineering practices with:
 """
 
 from lns_solver.core.grid import LNSGrid
-from lns_solver.core.state import LNSState
+from lns_solver.core.state_enhanced import EnhancedLNSState, StateConfiguration, LNSVariables
 from lns_solver.core.physics import LNSPhysics
-from lns_solver.core.numerics import LNSNumerics
+from lns_solver.core.numerics_optimized import OptimizedLNSNumerics
 
 __all__ = [
     "LNSGrid",
-    "LNSState", 
+    "EnhancedLNSState",
+    "StateConfiguration",
+    "LNSVariables", 
     "LNSPhysics",
-    "LNSNumerics",
+    "OptimizedLNSNumerics",
 ]
+
+# Backward compatibility alias
+LNSState = EnhancedLNSState

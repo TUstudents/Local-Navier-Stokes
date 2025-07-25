@@ -27,12 +27,16 @@ __license__ = "MIT"
 
 # Core infrastructure imports (available immediately)
 from lns_solver.core.grid import LNSGrid
-from lns_solver.core.state import LNSState
+from lns_solver.core.state_enhanced import EnhancedLNSState, StateConfiguration, LNSVariables
 from lns_solver.core.physics import LNSPhysics
-from lns_solver.core.numerics import LNSNumerics
+from lns_solver.core.numerics_optimized import OptimizedLNSNumerics
 
 # Solver imports
-from lns_solver.solvers.solver_1d import LNSSolver1D
+from lns_solver.solvers.solver_1d_final import FinalIntegratedLNSSolver1D
+
+# Backward compatibility aliases
+LNSSolver1D = FinalIntegratedLNSSolver1D
+LNSState = EnhancedLNSState  # Backward compatibility for legacy code
 
 # Utility imports
 from lns_solver.utils.constants import PhysicalConstants
@@ -46,11 +50,15 @@ __all__ = [
     "__license__",
     # Core classes
     "LNSGrid",
-    "LNSState", 
+    "EnhancedLNSState",
+    "StateConfiguration", 
+    "LNSVariables",
+    "LNSState",  # Backward compatibility alias
     "LNSPhysics",
-    "LNSNumerics",
+    "OptimizedLNSNumerics",
     # Solvers
-    "LNSSolver1D",
+    "FinalIntegratedLNSSolver1D",
+    "LNSSolver1D",  # Backward compatibility alias
     # Utilities
     "PhysicalConstants",
     "LNSDataWriter",

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import logging
 
 from lns_solver.core.grid import LNSGrid
-from lns_solver.core.state import LNSState
+from lns_solver.core.state_enhanced import EnhancedLNSState
 
 logger = logging.getLogger(__name__)
 

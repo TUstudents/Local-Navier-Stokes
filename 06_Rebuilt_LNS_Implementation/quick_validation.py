@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from lns_solver.solvers.solver_1d import LNSSolver1D
+from lns_solver.solvers.solver_1d_final import FinalIntegratedLNSSolver1D
 from lns_solver.validation.analytical_solutions import RiemannExactSolver
 from lns_solver.validation.classical_solvers import EulerSolver1D
 from lns_solver.core.grid import LNSGrid
@@ -30,7 +30,7 @@ def quick_riemann_validation():
     
     # LNS solver
     print("Running LNS solver...")
-    lns_solver = LNSSolver1D.create_sod_shock_tube(nx=nx)
+    lns_solver = FinalIntegratedLNSSolver1D.create_sod_shock_tube(nx=nx)
     lns_results = lns_solver.solve(t_final=t_final, dt_initial=1e-8)
     lns_final = lns_results['output_data']['primitives'][-1]
     
@@ -140,7 +140,7 @@ def quick_conservation_test():
     print("\n🔬 Quick Conservation Test")
     print("-" * 40)
     
-    solver = LNSSolver1D.create_sod_shock_tube(nx=100)
+    solver = FinalIntegratedLNSSolver1D.create_sod_shock_tube(nx=100)
     results = solver.solve(t_final=1e-4, dt_initial=1e-8)
     
     # Analyze conservation

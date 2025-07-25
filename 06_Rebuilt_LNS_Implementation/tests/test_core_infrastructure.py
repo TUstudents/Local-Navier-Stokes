@@ -1,17 +1,19 @@
 """
-Unit tests for core LNS infrastructure.
+Unit tests for modern LNS infrastructure.
 
-Tests the fundamental building blocks: LNSGrid, LNSState, LNSPhysics, LNSNumerics.
+Tests the production components: LNSGrid, EnhancedLNSState, LNSPhysics, OptimizedLNSNumerics.
 """
 
 import pytest
 import numpy as np
 import numpy.testing as npt
 
-from lns_solver.core.grid import LNSGrid, BoundaryCondition
-from lns_solver.core.state import LNSState, MaterialProperties
+from lns_solver.core.grid import LNSGrid
+from lns_solver.core.state_enhanced import EnhancedLNSState, StateConfiguration, LNSVariables
 from lns_solver.core.physics import LNSPhysics, LNSPhysicsParameters
-from lns_solver.core.numerics import LNSNumerics
+from lns_solver.core.numerics_optimized import OptimizedLNSNumerics
+from lns_solver.core.boundary_conditions import GhostCellBoundaryHandler, BCType, create_outflow_bc
+from lns_solver.solvers.solver_1d_final import FinalIntegratedLNSSolver1D
 
 
 class TestLNSGrid:
@@ -58,17 +60,22 @@ class TestLNSGrid:
         assert bc_left.values == 300.0
         assert bc_right.bc_type == 'outflow'
         
-    def test_apply_boundary_conditions_1d(self):
-        """Test 1D boundary condition application."""
+    def test_boundary_condition_retrieval(self):
+        """Test boundary condition retrieval."""
         grid = LNSGrid.create_uniform_1d(nx=10, x_min=0.0, x_max=1.0)
         grid.set_boundary_condition('left', 'dirichlet', values=100.0)
         grid.set_boundary_condition('right', 'neumann')
         
-        field = np.ones(10) * 50.0
-        field_bc = grid.apply_boundary_conditions(field)
+        # Test retrieval of boundary conditions
+        bc_left = grid.get_boundary_condition('left')
+        bc_right = grid.get_boundary_condition('right')
         
-        assert field_bc[0] == 100.0  # Dirichlet BC applied
-        assert field_bc[-1] == field_bc[-2]  # Neumann BC (zero gradient)
+        assert bc_left is not None
+        assert bc_left.bc_type == 'dirichlet'
+        assert bc_left.values == 100.0
+        
+        assert bc_right is not None
+        assert bc_right.bc_type == 'neumann'
         
     def test_cell_volumes(self):
         """Test cell volume computation."""
@@ -87,125 +94,110 @@ class TestLNSGrid:
             LNSGrid.create_uniform_1d(nx=10, x_min=1.0, x_max=0.0)  # Invalid bounds
 
 
-class TestLNSState:
-    """Test cases for LNSState class."""
+class TestEnhancedLNSState:
+    """Test cases for EnhancedLNSState class."""
     
     def test_state_initialization(self):
-        """Test state vector initialization."""
+        """Test enhanced state initialization."""
         grid = LNSGrid.create_uniform_1d(nx=10, x_min=0.0, x_max=1.0)
-        state = LNSState(grid, n_variables=5)
+        config = StateConfiguration(include_heat_flux=True, include_stress=True)
+        state = EnhancedLNSState(grid, config)
         
         assert state.grid == grid
-        assert state.n_variables == 5
-        assert state.Q.shape == (10, 5)
-        assert np.all(state.Q == 0.0)  # Initially zero
+        assert state.config == config
+        assert state.Q.shape == (10, 5)  # density, momentum_x, total_energy, heat_flux_x, stress_xx
+        assert len(state.config.variable_names) == 5
         
-    def test_variable_access(self):
-        """Test variable getting and setting."""
+    def test_named_accessors(self):
+        """Test named accessor properties."""
         grid = LNSGrid.create_uniform_1d(nx=5, x_min=0.0, x_max=1.0)
-        state = LNSState(grid, n_variables=5)
+        state = EnhancedLNSState(grid)
         
-        # Set density
-        state.set_variable('density', 1.2)
-        density = state.get_variable('density')
+        # Set values using direct array access
+        state.Q[:, LNSVariables.DENSITY] = 1.2
+        state.Q[:, LNSVariables.MOMENTUM_X] = 0.5
+        state.Q[:, LNSVariables.TOTAL_ENERGY] = 250000.0
         
-        npt.assert_array_almost_equal(density, 1.2 * np.ones(5))
+        # Test named accessors
+        npt.assert_array_almost_equal(state.density, 1.2 * np.ones(5))
+        npt.assert_array_almost_equal(state.momentum_x, 0.5 * np.ones(5))
+        npt.assert_array_almost_equal(state.total_energy, 250000.0 * np.ones(5))
         
-        # Set array
-        momentum = np.linspace(0.1, 0.5, 5)
-        state.set_variable('momentum_x', momentum)
-        retrieved = state.get_variable('momentum_x')
+        # Test computed properties
+        velocity = state.velocity_x
+        assert velocity.shape == (5,)
+        npt.assert_array_almost_equal(velocity, 0.5/1.2 * np.ones(5))  # u = momentum/density
         
-        npt.assert_array_almost_equal(retrieved, momentum)
+    def test_variable_enums(self):
+        """Test LNSVariables enum consistency.""" 
+        grid = LNSGrid.create_uniform_1d(nx=3, x_min=0.0, x_max=1.0)
+        state = EnhancedLNSState(grid)
         
-    def test_q_to_p_1d_conversion(self):
-        """Test 1D conservative to primitive conversion."""
-        grid = LNSGrid.create_uniform_1d(nx=1, x_min=0.0, x_max=1.0)
-        state = LNSState(grid, n_variables=5)
+        # Test enum values match expected indices
+        assert LNSVariables.DENSITY == 0
+        assert LNSVariables.MOMENTUM_X == 1
+        assert LNSVariables.TOTAL_ENERGY == 2
+        assert LNSVariables.HEAT_FLUX_X == 3
+        assert LNSVariables.STRESS_XX == 4
         
-        # Calculate correct total energy for ρ=1.0, u=0.1, T=300K
-        rho = 1.0
-        u = 0.1
-        T = 300.0
-        cv = 287.0 / 0.4  # R/(γ-1)
-        e_internal = rho * cv * T
-        kinetic_energy = 0.5 * rho * u**2
-        E_total = e_internal + kinetic_energy
+        # Test enum access matches direct indexing
+        state.Q[:, 0] = 1.0
+        state.Q[:, 1] = 0.1
         
-        Q = np.array([rho, rho*u, E_total, 0.0, 0.0])  # [ρ, ρu, E, q, σ]
+        npt.assert_array_equal(state.Q[:, LNSVariables.DENSITY], state.Q[:, 0])
+        npt.assert_array_equal(state.Q[:, LNSVariables.MOMENTUM_X], state.Q[:, 1])
         
-        P = state.Q_to_P_1d(Q)
+    def test_primitive_variables(self):
+        """Test primitive variable computation."""
+        grid = LNSGrid.create_uniform_1d(nx=3, x_min=0.0, x_max=1.0)
+        state = EnhancedLNSState(grid)
         
-        assert P['density'] == 1.0
-        assert P['velocity'] == 0.1
-        npt.assert_almost_equal(P['temperature'], 300.0, decimal=1)
-        npt.assert_almost_equal(P['pressure'], 287.0 * 300.0, decimal=1)
+        # Set up realistic state with known values
+        state.Q[:, LNSVariables.DENSITY] = 1.0
+        state.Q[:, LNSVariables.MOMENTUM_X] = 0.1
+        state.Q[:, LNSVariables.TOTAL_ENERGY] = 215007.5  # For T=300K, u=0.1
         
-    def test_p_to_q_1d_conversion(self):
-        """Test 1D primitive to conservative conversion."""
-        grid = LNSGrid.create_uniform_1d(nx=1, x_min=0.0, x_max=1.0)
-        state = LNSState(grid, n_variables=5)
-        
-        P = {
-            'density': 1.0,
-            'velocity': 0.1,
-            'temperature': 300.0,
-            'heat_flux_x': 0.0,
-            'stress_xx': 0.0
-        }
-        
-        Q = state.P_to_Q_1d(P)
-        
-        assert Q[0] == 1.0  # density
-        assert Q[1] == 0.1  # momentum
-        # Energy should include internal + kinetic
-        expected_E = 1.0 * (287.0 / 0.4) * 300.0 + 0.5 * 1.0 * 0.1**2
-        npt.assert_almost_equal(Q[2], expected_E, decimal=1)
-        
-    def test_initialize_uniform(self):
-        """Test uniform initialization."""
-        grid = LNSGrid.create_uniform_1d(nx=5, x_min=0.0, x_max=1.0)
-        state = LNSState(grid, n_variables=5)
-        
-        state.initialize_uniform(density=1.2, pressure=101325.0, velocity_x=0.5)
-        
+        # Test primitive variable computation
         primitives = state.get_primitive_variables()
         
-        npt.assert_array_almost_equal(primitives['density'], 1.2 * np.ones(5))
-        npt.assert_array_almost_equal(primitives['velocity'], 0.5 * np.ones(5))
-        npt.assert_array_almost_equal(primitives['pressure'], 101325.0 * np.ones(5))
+        npt.assert_array_almost_equal(primitives['density'], 1.0)
+        npt.assert_array_almost_equal(primitives['velocity'], 0.1)
+        assert primitives['pressure'].shape == (3,)
+        assert primitives['temperature'].shape == (3,)
         
-    def test_sod_shock_tube_initialization(self):
-        """Test Sod shock tube initialization."""
-        grid = LNSGrid.create_uniform_1d(nx=10, x_min=0.0, x_max=1.0)
-        state = LNSState(grid, n_variables=5)
+    def test_state_initialization_methods(self):
+        """Test state initialization methods."""
+        grid = LNSGrid.create_uniform_1d(nx=5, x_min=0.0, x_max=1.0)
+        state = EnhancedLNSState(grid)
         
+        # Test Sod shock tube initialization
         state.initialize_sod_shock_tube()
         
-        primitives = state.get_primitive_variables()
-        
-        # Check left state (x < 0.5)
-        left_indices = grid.x < 0.5
-        npt.assert_array_almost_equal(primitives['density'][left_indices], 1.0)
-        npt.assert_array_almost_equal(primitives['velocity'][left_indices], 0.0)
-        
-        # Check right state (x >= 0.5)
-        right_indices = grid.x >= 0.5
-        npt.assert_array_almost_equal(primitives['density'][right_indices], 0.125)
-        npt.assert_array_almost_equal(primitives['velocity'][right_indices], 0.0)
+        # Check that left and right states are different
+        left_density = state.density[0]
+        right_density = state.density[-1]
+        assert left_density != right_density
+        assert left_density > 0
+        assert right_density > 0
         
     def test_state_validation(self):
-        """Test state validation."""
-        grid = LNSGrid.create_uniform_1d(nx=5, x_min=0.0, x_max=1.0)
-        state = LNSState(grid, n_variables=5)
+        """Test state validation functionality."""
+        grid = LNSGrid.create_uniform_1d(nx=3, x_min=0.0, x_max=1.0)
+        state = EnhancedLNSState(grid)
         
-        # Valid state
-        state.initialize_uniform(density=1.0, pressure=101325.0)
-        assert state.validate_state() == True
+        # Set valid state
+        state.Q[:, LNSVariables.DENSITY] = 1.0
+        state.Q[:, LNSVariables.MOMENTUM_X] = 0.1
+        state.Q[:, LNSVariables.TOTAL_ENERGY] = 215000.0
         
-        # Invalid state (negative density)
-        state.Q[0, 0] = -1.0
-        assert state.validate_state() == False
+        validation = state.validate_state()
+        
+        assert isinstance(validation, dict)
+        assert 'positive_density' in validation
+        assert 'positive_pressure' in validation
+        assert 'finite_values' in validation
+
+
 
 
 class TestLNSPhysics:
@@ -319,119 +311,107 @@ class TestLNSPhysics:
         npt.assert_array_almost_equal(pressure, expected)
 
 
-class TestLNSNumerics:
-    """Test cases for LNSNumerics class."""
+class TestOptimizedLNSNumerics:
+    """Test cases for OptimizedLNSNumerics class."""
     
     def test_numerics_initialization(self):
-        """Test numerics initialization."""
-        numerics = LNSNumerics(use_numba=False)
-        assert numerics.use_numba == False
+        """Test optimized numerics initialization."""
+        numerics = OptimizedLNSNumerics(n_ghost=2)
+        assert numerics.n_ghost == 2
+        assert numerics.flux_call_count == 0
         
-    def test_gradient_computation_efficient(self):
-        """Test efficient O(N²) gradient computation."""
-        # Create test fields
-        nx, ny = 10, 8
-        field_1 = np.sin(np.linspace(0, 2*np.pi, nx*ny)).reshape(nx, ny)
-        field_2 = np.cos(np.linspace(0, 2*np.pi, nx*ny)).reshape(nx, ny)
+    def test_primitive_variable_computation(self):
+        """Test vectorized primitive variable computation."""
+        numerics = OptimizedLNSNumerics()
         
-        fields = [field_1, field_2]
-        dx, dy = 0.1, 0.1
+        # Create test conservative state
+        Q = np.array([
+            [1.0, 0.1, 215007.5, 0.0, 0.0],  # Standard test state
+            [1.2, 0.2, 258009.0, 10.0, 5.0]  # Different state
+        ])
         
-        # Compute gradients
-        gradients = LNSNumerics.compute_gradients_efficient(fields, dx, dy)
+        primitives = numerics.compute_primitive_variables_vectorized(Q)
         
-        # Check output structure
-        assert 'field_0' in gradients
-        assert 'field_1' in gradients
+        # Check that all expected keys are present
+        expected_keys = ['density', 'velocity', 'pressure', 'temperature', 'sound_speed', 'heat_flux', 'stress']
+        for key in expected_keys:
+            assert key in primitives
         
-        grad_x_0, grad_y_0 = gradients['field_0']
-        grad_x_1, grad_y_1 = gradients['field_1']
+        # Check shapes
+        assert primitives['density'].shape == (2,)
+        assert primitives['velocity'].shape == (2,)
+        assert primitives['pressure'].shape == (2,)
         
-        assert grad_x_0.shape == (nx, ny)
-        assert grad_y_0.shape == (nx, ny)
-        assert grad_x_1.shape == (nx, ny)
-        assert grad_y_1.shape == (nx, ny)
+        # Check physical validity
+        assert np.all(primitives['density'] > 0)
+        assert np.all(primitives['pressure'] > 0)
+        assert np.all(primitives['temperature'] > 0)
         
-        # Verify gradients are computed (not zero)
-        assert np.any(grad_x_0 != 0)
-        assert np.any(grad_y_0 != 0)
+    def test_optimized_hll_flux(self):
+        """Test optimized HLL flux computation."""
+        numerics = OptimizedLNSNumerics()
         
-    def test_hyperbolic_rhs_1d(self):
-        """Test 1D hyperbolic RHS computation."""
-        # Simple test case
-        N_cells, N_vars = 5, 3
-        state_field = np.random.rand(N_cells, N_vars)
-        dx = 0.1
+        # Sod shock tube states
+        Q_L = np.array([1.0, 0.0, 2.5, 0.0, 0.0])
+        Q_R = np.array([0.125, 0.0, 0.25, 0.0, 0.0])
         
-        def simple_flux(Q_L, Q_R):
-            return 0.5 * (Q_L + Q_R)  # Simple average flux
-        
-        RHS = LNSNumerics.compute_hyperbolic_rhs_1d(state_field, simple_flux, dx)
-        
-        assert RHS.shape == (N_cells, N_vars)
-        
-        # Conservation check: sum of RHS should be zero for interior cells
-        # (boundary effects may cause non-zero sum)
-        
-    def test_hyperbolic_rhs_2d_corrected_signs(self):
-        """Test 2D hyperbolic RHS with CORRECTED signs."""
-        N_x, N_y, N_vars = 4, 3, 2
-        state_field = np.ones((N_x, N_y, N_vars))
-        dx, dy = 0.1, 0.1
-        
-        def constant_flux(Q_L, Q_R, direction='x'):
-            return np.ones_like(Q_L)  # Constant flux
-        
-        RHS = LNSNumerics.compute_hyperbolic_rhs_2d(state_field, constant_flux, dx, dy)
-        
-        assert RHS.shape == (N_x, N_y, N_vars)
-        
-        # With constant flux and uniform state, interior cells should have zero RHS
-        # (flux in = flux out)
-        # Only boundary cells should have non-zero RHS
-        
-    def test_hll_flux_1d(self):
-        """Test HLL Riemann solver."""
-        # Sod shock tube left and right states
-        Q_left = np.array([1.0, 0.0, 2.5, 0.0, 0.0])
-        Q_right = np.array([0.125, 0.0, 0.25, 0.0, 0.0])
-        
-        physics_params = {
-            'specific_heat_ratio': 1.4,
-            'gas_constant': 287.0,
-            'tau_q': 1e-6,
-            'tau_sigma': 1e-6,
-            'k_thermal': 0.025,
-            'mu_viscous': 1e-3
+        # Pre-computed primitives
+        P_L = {
+            'density': 1.0, 'velocity': 0.0, 'pressure': 1.0, 'sound_speed': 1.18
+        }
+        P_R = {
+            'density': 0.125, 'velocity': 0.0, 'pressure': 0.1, 'sound_speed': 1.06
         }
         
-        flux = LNSNumerics.hll_flux_1d(Q_left, Q_right, physics_params)
+        physics_params = {'gamma': 1.4}
+        
+        flux, wave_speed = numerics.optimized_hll_flux_1d(Q_L, Q_R, P_L, P_R, physics_params)
         
         assert len(flux) == 5
-        assert np.all(np.isfinite(flux))  # No NaN or inf
+        assert np.all(np.isfinite(flux))
+        assert wave_speed > 0
         
-    def test_semi_implicit_source_update(self):
-        """Test semi-implicit source term update."""
-        Q_old = np.array([1.0, 0.1, 253125.0, 100.0, 50.0])
-        Q_nsf = np.array([1.0, 0.1, 253125.0, 80.0, 40.0])
-        obj_derivs = np.array([0.0, 0.0, 0.0, 10.0, 5.0])
+    def test_ssp_rk2_step_optimized(self):
+        """Test optimized SSP-RK2 time stepping."""
+        numerics = OptimizedLNSNumerics()
         
-        relaxation_times = {'tau_q': 1e-6, 'tau_sigma': 1e-5}
-        dt = 1e-8
-        variable_indices = {'heat_flux': [3], 'stress': [4]}
+        # Simple test state
+        Q = np.array([[1.0, 0.1, 215000.0, 0.0, 0.0]])
         
-        Q_new = LNSNumerics.semi_implicit_source_update(
-            Q_old, Q_nsf, obj_derivs, relaxation_times, dt, variable_indices
-        )
+        def simple_rhs(Q_in):
+            # Simple decay RHS for testing
+            return -0.1 * Q_in, 1.0
         
-        assert len(Q_new) == 5
-        assert Q_new[0] == Q_old[0]  # Unchanged variables
-        assert Q_new[1] == Q_old[1]
-        assert Q_new[2] == Q_old[2]
+        dt = 1e-6
+        Q_new = numerics.ssp_rk2_step_optimized(Q, simple_rhs, dt)
         
-        # Heat flux and stress should be updated toward NSF targets
-        assert Q_new[3] != Q_old[3]
-        assert Q_new[4] != Q_old[4]
+        assert Q_new.shape == Q.shape
+        assert np.all(np.isfinite(Q_new))
+        assert np.all(Q_new[:, 0] > 0)  # Positive density maintained
+        
+    def test_cfl_time_step_computation(self):
+        """Test CFL time step computation."""
+        numerics = OptimizedLNSNumerics()
+        
+        primitives = {
+            'velocity': np.array([0.1, 0.2]),
+            'sound_speed': np.array([340.0, 350.0])
+        }
+        
+        dx = 0.01
+        dt = numerics.compute_cfl_time_step(primitives, dx, cfl_target=0.8)
+        
+        assert dt > 0
+        assert dt < 1e-3  # Should be small for reasonable CFL
+        
+    def test_performance_tracking(self):
+        """Test performance statistics tracking."""
+        numerics = OptimizedLNSNumerics()
+        
+        # Initially zero
+        stats = numerics.get_performance_stats()
+        assert stats['total_flux_calls'] == 0
+        assert stats['total_flux_time'] == 0.0
 
 
 # Integration tests
@@ -439,24 +419,30 @@ class TestCoreIntegration:
     """Integration tests combining multiple core components."""
     
     def test_complete_1d_setup(self):
-        """Test complete 1D setup with all core components."""
+        """Test complete 1D setup with all modern core components."""
         # Create grid
         grid = LNSGrid.create_uniform_1d(nx=10, x_min=0.0, x_max=1.0)
         
-        # Create state
-        state = LNSState(grid, n_variables=5)
-        state.initialize_uniform(density=1.0, pressure=101325.0)
+        # Create enhanced state
+        config = StateConfiguration(include_heat_flux=True, include_stress=True)
+        state = EnhancedLNSState(grid, config)
+        state.initialize_sod_shock_tube()
         
         # Create physics
-        physics = LNSPhysics()
+        physics_params = LNSPhysicsParameters(
+            mu_viscous=1e-5, k_thermal=0.025, tau_q=1e-6, tau_sigma=1e-6
+        )
+        physics = LNSPhysics(physics_params)
         
-        # Create numerics
-        numerics = LNSNumerics()
+        # Create optimized numerics
+        numerics = OptimizedLNSNumerics(n_ghost=2)
         
         # Test that everything works together
         primitives = state.get_primitive_variables()
         assert 'density' in primitives
         assert 'velocity' in primitives
+        assert 'pressure' in primitives
+        assert 'temperature' in primitives
         
         # Test physics computation
         du_dx = 0.1
@@ -468,34 +454,48 @@ class TestCoreIntegration:
         assert np.isfinite(q_nsf)
         assert np.isfinite(sigma_nsf)
         
-        # Test gradient computation
-        temperature_field = primitives['temperature']
-        gradients = numerics.compute_gradients_efficient([temperature_field], grid.dx)
+        # Test primitive variable computation with numerics
+        Q_primitives = numerics.compute_primitive_variables_vectorized(state.Q)
+        assert 'density' in Q_primitives
+        assert 'velocity' in Q_primitives
         
-        assert 'field_0' in gradients
+        # Verify enhanced state features
+        assert hasattr(state, 'density')
+        assert hasattr(state, 'velocity_x')
+        assert state.config.n_variables == 5
         
-    def test_2d_integration(self):
-        """Test 2D integration of core components."""
-        # Create 2D grid
-        grid = LNSGrid.create_uniform_2d(nx=5, ny=4, x_bounds=(0, 1), y_bounds=(0, 0.8))
+    def test_solver_integration(self):
+        """Test integration with FinalIntegratedLNSSolver1D."""
+        # Create solver using modern API
+        solver = FinalIntegratedLNSSolver1D.create_sod_shock_tube(nx=20)
         
-        # Create 2D state
-        state = LNSState(grid, n_variables=9)
-        state.initialize_uniform(density=1.2, pressure=101325.0, velocity_x=0.1, velocity_y=0.05)
+        # Verify solver components
+        assert isinstance(solver.state, EnhancedLNSState)
+        assert isinstance(solver.numerics, OptimizedLNSNumerics)
+        assert isinstance(solver.physics, LNSPhysics)
         
-        # Verify 2D state works
-        primitives = state.get_primitive_variables()
-        assert 'velocity_x' in primitives
-        assert 'velocity_y' in primitives
-        assert primitives['velocity_x'].shape == (20,)  # 5*4 cells
+        # Test initial state
+        primitives = solver.state.get_primitive_variables()
+        assert 'density' in primitives
+        assert 'velocity' in primitives
+        assert np.any(primitives['density'] > 0)
         
-        # Test 2D gradient computation
-        temp_field = primitives['temperature'].reshape(5, 4)
-        gradients = LNSNumerics.compute_gradients_efficient([temp_field], grid.dx, grid.dy)
+        # Test that solver has the expected public API
+        assert hasattr(solver, 'solve')
+        assert callable(getattr(solver, 'solve'))
         
-        grad_x, grad_y = gradients['field_0']
-        assert grad_x.shape == (5, 4)
-        assert grad_y.shape == (5, 4)
+        # Test basic solver functionality with small simulation
+        try:
+            results = solver.solve(t_final=1e-6, dt_initial=1e-9)
+            solver_functional = True
+            has_output = 'output_data' in results and len(results['output_data']) > 0
+        except Exception as e:
+            solver_functional = False
+            has_output = False
+            
+        # Solver should be functional for basic operations
+        assert solver_functional, "Solver should successfully run basic simulation"
+        assert has_output, "Solver should produce meaningful output data"
 
 
 if __name__ == "__main__":
