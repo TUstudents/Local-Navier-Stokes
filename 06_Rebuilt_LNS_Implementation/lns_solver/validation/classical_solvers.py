@@ -155,9 +155,10 @@ class EulerSolver1D:
     def _euler_rhs(self, Q: np.ndarray) -> np.ndarray:
         """Compute Euler RHS efficiently (wrapper for time stepping)."""
         # Set up default boundary conditions for Euler solver
+        from lns_solver.core.boundary_conditions import create_outflow_bc
         boundary_conditions = {
-            'left': {'type': 'outflow'},
-            'right': {'type': 'outflow'}  
+            'left': create_outflow_bc(),
+            'right': create_outflow_bc()
         }
         
         physics_params = {
@@ -165,10 +166,14 @@ class EulerSolver1D:
             'R_gas': self.R
         }
         
-        rhs_result, _ = self.numerics.compute_hyperbolic_rhs_1d_optimized(
-            Q, self.compute_euler_flux, physics_params, self.grid.dx, boundary_conditions
+        # Create wrapper for flux function to match interface
+        def flux_wrapper(Q_L, Q_R, P_L, P_R, phys_params):
+            return self.compute_euler_flux(Q_L, Q_R), 0.0  # Return flux and dummy wave speed
+        
+        rhs_result, max_wave_speed = self.numerics.compute_hyperbolic_rhs_1d_optimized(
+            Q, flux_wrapper, physics_params, self.grid.dx, boundary_conditions
         )
-        return rhs_result
+        return rhs_result, max_wave_speed
     
     def take_time_step(self, dt: float) -> None:
         """Take single time step using SSP-RK2 with optimized RHS."""
@@ -400,9 +405,10 @@ class NavierStokesSolver1D:
     def _convective_rhs(self, Q: np.ndarray) -> np.ndarray:
         """Compute convective RHS efficiently (wrapper for time stepping)."""
         # Set up default boundary conditions
+        from lns_solver.core.boundary_conditions import create_outflow_bc
         boundary_conditions = {
-            'left': {'type': 'outflow'},
-            'right': {'type': 'outflow'}  
+            'left': create_outflow_bc(),
+            'right': create_outflow_bc()
         }
         
         physics_params = {
@@ -410,10 +416,14 @@ class NavierStokesSolver1D:
             'R_gas': self.R
         }
         
-        rhs_result, _ = self.numerics.compute_hyperbolic_rhs_1d_optimized(
-            Q, self.compute_ns_flux, physics_params, self.grid.dx, boundary_conditions
+        # Create wrapper for flux function to match interface
+        def flux_wrapper(Q_L, Q_R, P_L, P_R, phys_params):
+            return self.compute_ns_flux(Q_L, Q_R), 0.0  # Return flux and dummy wave speed
+        
+        rhs_result, max_wave_speed = self.numerics.compute_hyperbolic_rhs_1d_optimized(
+            Q, flux_wrapper, physics_params, self.grid.dx, boundary_conditions
         )
-        return rhs_result
+        return rhs_result, max_wave_speed
     
     def take_time_step(self, dt: float) -> None:
         """Take single time step with CORRECTED viscous term treatment.
