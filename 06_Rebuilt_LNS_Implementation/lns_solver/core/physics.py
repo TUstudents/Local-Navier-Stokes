@@ -534,10 +534,10 @@ class LNSPhysics:
         production_q = u * dq_dx + du_dx * q_x
         
         # UCM PRODUCTION TERMS (Stress objective derivative)  
-        # From D_σ/Dt = ∂σ/∂t + u·∇σ - 2σ(∂u/∂x)
-        # Production terms: u·∇σ - 2σ(∂u/∂x)
-        # The factor of 2 comes from the full 1D UCM tensor contraction
-        production_sigma = u * dsigma_dx - 2.0 * sigma_xx * du_dx
+        # From D_σ/Dt = ∂σ/∂t + u·∇σ - Lσ - σL^T = ∂σ/∂t + u·∇σ + 2σ(∂u/∂x)
+        # Production terms: u·∇σ + 2σ(∂u/∂x)  [CORRECTED SIGN]
+        # The +2.0 factor ensures proper viscoelastic stress growth under extension
+        production_sigma = u * dsigma_dx + 2.0 * sigma_xx * du_dx
         
         # === STEP 4: Compute STIFF relaxation terms ===
         
