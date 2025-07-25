@@ -14,7 +14,7 @@ Example:
     Create a 2D grid around a cylinder:
     
     >>> grid = LNSGrid.create_cylinder_grid(radius=0.5, nx=100, ny=100)
-    >>> grid.set_boundary_condition('cylinder', 'no_slip')
+    >>> # Use solver.set_boundary_condition() for boundary conditions
 """
 
 from typing import Dict, List, Optional, Tuple, Union, Literal
@@ -25,56 +25,29 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Type aliases for clarity
-BoundaryConditionType = Literal[
-    'periodic', 'dirichlet', 'neumann', 'no_slip', 'slip', 'outflow', 'inflow'
-]
 GridType = Literal['uniform', 'stretched', 'unstructured']
 CoordinateArray = np.ndarray
 
 
-class BoundaryCondition:
-    """
-    Represents a boundary condition with type and values.
-    
-    Attributes:
-        bc_type: Type of boundary condition
-        values: Boundary condition values (if applicable)
-        region: Geometric region where BC applies
-    """
-    
-    def __init__(
-        self, 
-        bc_type: BoundaryConditionType,
-        values: Optional[Union[float, np.ndarray]] = None,
-        region: Optional[str] = None
-    ):
-        self.bc_type = bc_type
-        self.values = values
-        self.region = region
-        
-    def __repr__(self) -> str:
-        return f"BoundaryCondition(type='{self.bc_type}', region='{self.region}')"
-
-
 class LNSGrid:
     """
-    Computational grid for LNS solver with boundary condition management.
+    Computational grid for LNS solver - handles geometry and grid metrics only.
     
-    This class handles the computational geometry, grid metrics, and boundary
-    conditions for finite volume discretization. It supports uniform and
-    non-uniform grids in 1D, 2D, and 3D.
+    This class handles the computational geometry and grid metrics for finite 
+    volume discretization. It supports uniform and non-uniform grids in 1D, 2D, and 3D.
+    
+    ARCHITECTURAL CHANGE: Boundary conditions are now handled exclusively by
+    GhostCellBoundaryHandler from boundary_conditions.py to avoid dual systems.
     
     Attributes:
         ndim: Number of spatial dimensions
         nx, ny, nz: Number of cells in each direction
         x, y, z: Cell center coordinates
         dx, dy, dz: Grid spacing (uniform) or spacing arrays
-        boundary_conditions: Dictionary of boundary conditions
         
     Example:
         >>> grid = LNSGrid.create_uniform_1d(100, 0.0, 1.0)
-        >>> grid.set_boundary_condition('left', 'dirichlet', values=300.0)
-        >>> grid.set_boundary_condition('right', 'outflow')
+        >>> # For boundary conditions, use GhostCellBoundaryHandler instead
     """
     
     def __init__(
@@ -102,7 +75,6 @@ class LNSGrid:
             
         self.ndim = ndim
         self.grid_type = grid_type
-        self.boundary_conditions: Dict[str, BoundaryCondition] = {}
         
         # Store coordinates and validate
         self.coordinates = coordinates
@@ -306,7 +278,7 @@ class LNSGrid:
             
         Example:
             >>> grid = LNSGrid.create_cylinder_grid(0.5, 100, 100)
-            >>> grid.set_boundary_condition('cylinder', 'no_slip')
+            >>> # Use solver.set_boundary_condition() for boundary conditions
         """
         if radius <= 0:
             raise ValueError(f"radius must be positive, got {radius}")
@@ -320,40 +292,18 @@ class LNSGrid:
         # Mark cylinder boundary (this is simplified - real implementation would
         # use immersed boundary or body-fitted coordinates)
         grid.cylinder_radius = radius
-        grid.set_boundary_condition('cylinder', 'no_slip')
-        grid.set_boundary_condition('far_field', 'outflow')
         
         return grid
     
-    def set_boundary_condition(
-        self,
-        region: str,
-        bc_type: BoundaryConditionType,
-        values: Optional[Union[float, np.ndarray]] = None
-    ) -> None:
-        """
-        Set boundary condition for a region.
-        
-        Args:
-            region: Boundary region name ('left', 'right', 'top', 'bottom', etc.)
-            bc_type: Type of boundary condition
-            values: Boundary values (for Dirichlet conditions)
-            
-        Example:
-            >>> grid.set_boundary_condition('left', 'dirichlet', values=300.0)
-            >>> grid.set_boundary_condition('right', 'outflow')
-        """
-        if bc_type == 'dirichlet' and values is None:
-            raise ValueError("Dirichlet BC requires values")
-            
-        bc = BoundaryCondition(bc_type, values, region)
-        self.boundary_conditions[region] = bc
-        
-        logger.info(f"Set {bc_type} BC on {region}")
-        
-    def get_boundary_condition(self, region: str) -> Optional[BoundaryCondition]:
-        """Get boundary condition for a region."""
-        return self.boundary_conditions.get(region)
+    # ARCHITECTURAL CHANGE: Boundary condition methods removed
+    # 
+    # The conflicting boundary condition system has been removed from LNSGrid.
+    # All boundary condition handling is now done exclusively through
+    # GhostCellBoundaryHandler from boundary_conditions.py.
+    #
+    # This eliminates the dual, incompatible systems that caused confusion
+    # and potential bugs. Use solver.set_boundary_condition() which delegates
+    # to the proper GhostCellBoundaryHandler system.
     
     # REMOVED: apply_boundary_conditions method
     # 
@@ -459,9 +409,6 @@ class LNSGrid:
             if key not in ['ndim', 'grid_type']:
                 lines.append(f"{key:12s}: {value}")
                 
-        if self.boundary_conditions:
-            lines.append("\nBoundary Conditions:")
-            for region, bc in self.boundary_conditions.items():
-                lines.append(f"  {region:10s}: {bc.bc_type}")
+        lines.append("\nNote: Boundary conditions handled by GhostCellBoundaryHandler")
                 
         return "\n".join(lines)

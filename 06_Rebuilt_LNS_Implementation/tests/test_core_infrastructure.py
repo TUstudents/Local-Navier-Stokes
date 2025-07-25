@@ -45,37 +45,41 @@ class TestLNSGrid:
         assert grid.dy == 0.08
         
     def test_boundary_conditions(self):
-        """Test boundary condition management."""
+        """Test boundary condition management using proper GhostCellBoundaryHandler."""
         grid = LNSGrid.create_uniform_1d(nx=10, x_min=0.0, x_max=1.0)
         
-        # Set boundary conditions
-        grid.set_boundary_condition('left', 'dirichlet', values=300.0)
-        grid.set_boundary_condition('right', 'outflow')
+        # Test that grid no longer handles boundary conditions directly
+        assert not hasattr(grid, 'set_boundary_condition')
+        assert not hasattr(grid, 'get_boundary_condition')
+        assert not hasattr(grid, 'boundary_conditions')
         
-        # Check boundary conditions
-        bc_left = grid.get_boundary_condition('left')
-        bc_right = grid.get_boundary_condition('right')
+        # Test proper boundary condition system
+        bc_handler = GhostCellBoundaryHandler(n_ghost=2)
+        bc_handler.set_boundary_condition('left', create_outflow_bc())
         
-        assert bc_left.bc_type == 'dirichlet'
-        assert bc_left.values == 300.0
-        assert bc_right.bc_type == 'outflow'
+        # Test that handler works correctly
+        assert 'left' in bc_handler.boundary_conditions
+        assert bc_handler.boundary_conditions['left'].bc_type == BCType.OUTFLOW
         
     def test_boundary_condition_retrieval(self):
-        """Test boundary condition retrieval."""
+        """Test boundary condition retrieval using proper system."""
         grid = LNSGrid.create_uniform_1d(nx=10, x_min=0.0, x_max=1.0)
-        grid.set_boundary_condition('left', 'dirichlet', values=100.0)
-        grid.set_boundary_condition('right', 'neumann')
         
-        # Test retrieval of boundary conditions
-        bc_left = grid.get_boundary_condition('left')
-        bc_right = grid.get_boundary_condition('right')
+        # Test that grid is clean - no boundary condition attributes
+        assert not hasattr(grid, 'boundary_conditions')
         
-        assert bc_left is not None
-        assert bc_left.bc_type == 'dirichlet'
-        assert bc_left.values == 100.0
+        # Test proper boundary condition system retrieval
+        bc_handler = GhostCellBoundaryHandler(n_ghost=2)
         
-        assert bc_right is not None
-        assert bc_right.bc_type == 'neumann'
+        # Test that initially no boundary conditions exist
+        assert bc_handler.boundary_conditions == {}
+        
+        # Set a boundary condition and test retrieval
+        bc_handler.set_boundary_condition('left', create_outflow_bc())
+        assert 'left' in bc_handler.boundary_conditions
+        
+        # Test non-existent boundary condition
+        assert 'right' not in bc_handler.boundary_conditions
         
     def test_cell_volumes(self):
         """Test cell volume computation."""

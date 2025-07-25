@@ -72,13 +72,12 @@ class TestLNSSolver1D:
         npt.assert_array_almost_equal(primitives['density'][right_indices], 0.125)
         npt.assert_array_almost_equal(primitives['velocity'][right_indices], 0.0)
         
-        # Check boundary conditions (may not be set up in current implementation)
-        bc_left = solver.grid.get_boundary_condition('left')
-        bc_right = solver.grid.get_boundary_condition('right')
+        # Check that boundary conditions are handled by solver, not grid
+        assert not hasattr(solver.grid, 'get_boundary_condition')
+        assert hasattr(solver, 'set_boundary_condition')  # Solver has the interface
         
-        # Boundary conditions may be None if not explicitly set
-        # The interface works correctly - we just verify no exceptions are thrown
-        assert True  # Test passes if no exceptions thrown above
+        # The solver correctly uses GhostCellBoundaryHandler internally
+        assert True  # Test passes - architecture is correct
     
     def test_sod_shock_tube_variations(self):
         """Test Sod shock tube with different parameters."""
@@ -116,22 +115,27 @@ class TestLNSSolver1D:
         assert solver.t_current == 0.0
     
     def test_boundary_condition_interface(self):
-        """Test boundary condition interface."""
+        """Test boundary condition interface - solver only, not grid."""
         solver = LNSSolver1D.create_sod_shock_tube(nx=10)
         
         # Test that solver has boundary condition interface
         assert hasattr(solver, 'set_boundary_condition')
         assert callable(solver.set_boundary_condition)
         
-        # Test that grid can handle boundary conditions
-        assert hasattr(solver.grid, 'get_boundary_condition')
-        assert hasattr(solver.grid, 'set_boundary_condition')
+        # Test that grid NO LONGER handles boundary conditions (architectural fix)
+        assert not hasattr(solver.grid, 'get_boundary_condition')
+        assert not hasattr(solver.grid, 'set_boundary_condition')
+        assert not hasattr(solver.grid, 'boundary_conditions')
         
-        # The solver may or may not have boundary conditions set initially
-        bc_left = solver.grid.get_boundary_condition('left')
-        bc_right = solver.grid.get_boundary_condition('right')
+        # Test that solver correctly uses GhostCellBoundaryHandler internally
+        assert hasattr(solver, 'bc_handler')
         
-        # Just verify the interface works
+        # Test that we can set boundary conditions through solver interface
+        from lns_solver.core.boundary_conditions import create_outflow_bc
+        solver.set_boundary_condition('left', create_outflow_bc())
+        
+        # Verify it was set in the correct handler
+        assert 'left' in solver.bc_handler.boundary_conditions
         assert True  # Test passes if no exceptions thrown
     
     def test_state_manipulation(self):
