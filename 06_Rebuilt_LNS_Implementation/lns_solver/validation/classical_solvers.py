@@ -153,13 +153,30 @@ class EulerSolver1D:
             return 1e-6
     
     def _euler_rhs(self, Q: np.ndarray) -> np.ndarray:
-        """Compute Euler RHS efficiently (defined once, not per timestep)."""
-        return self.numerics.compute_hyperbolic_rhs_1d_optimized(Q, self.compute_euler_flux, self.grid.dx, {})
+        """Compute Euler RHS efficiently (wrapper for time stepping)."""
+        # Set up default boundary conditions for Euler solver
+        boundary_conditions = {
+            'left': {'type': 'outflow'},
+            'right': {'type': 'outflow'}  
+        }
+        
+        physics_params = {
+            'gamma': self.gamma,
+            'R_gas': self.R
+        }
+        
+        rhs_result, _ = self.numerics.compute_hyperbolic_rhs_1d_optimized(
+            Q, self.compute_euler_flux, physics_params, self.grid.dx, boundary_conditions
+        )
+        return rhs_result
     
     def take_time_step(self, dt: float) -> None:
         """Take single time step using SSP-RK2 with optimized RHS."""
         # Use pre-defined RHS function to avoid repeated function creation
-        self.Q = self.numerics.ssp_rk2_step_optimized(self.Q, self._euler_rhs, dt)
+        def rhs_wrapper(Q):
+            return self._euler_rhs(Q)
+            
+        self.Q = self.numerics.ssp_rk2_step_optimized(self.Q, rhs_wrapper, dt)
         self.t_current += dt
     
     def solve(self, t_final: float, cfl: float = 0.8) -> ClassicalSolution:
@@ -381,8 +398,22 @@ class NavierStokesSolver1D:
             return 1e-8
     
     def _convective_rhs(self, Q: np.ndarray) -> np.ndarray:
-        """Compute convective RHS efficiently (defined once, not per timestep)."""
-        return self.numerics.compute_hyperbolic_rhs_1d(Q, self.compute_ns_flux, self.grid.dx)
+        """Compute convective RHS efficiently (wrapper for time stepping)."""
+        # Set up default boundary conditions
+        boundary_conditions = {
+            'left': {'type': 'outflow'},
+            'right': {'type': 'outflow'}  
+        }
+        
+        physics_params = {
+            'gamma': self.gamma,
+            'R_gas': self.R
+        }
+        
+        rhs_result, _ = self.numerics.compute_hyperbolic_rhs_1d_optimized(
+            Q, self.compute_ns_flux, physics_params, self.grid.dx, boundary_conditions
+        )
+        return rhs_result
     
     def take_time_step(self, dt: float) -> None:
         """Take single time step with CORRECTED viscous term treatment.
@@ -391,7 +422,10 @@ class NavierStokesSolver1D:
         viscous work as energy dissipation, not energy transport.
         """
         # Step 1: Convective terms (hyperbolic) - optimized RHS
-        Q_intermediate = self.numerics.ssp_rk2_step_optimized(self.Q, self._convective_rhs, dt)
+        def rhs_wrapper(Q):
+            return self._convective_rhs(Q)
+            
+        Q_intermediate = self.numerics.ssp_rk2_step_optimized(self.Q, rhs_wrapper, dt)
         
         # Step 2: Viscous terms (parabolic) - CORRECTED implementation
         try:

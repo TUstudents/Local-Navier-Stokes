@@ -99,11 +99,13 @@ class FinalIntegratedLNSSolver1D:
         self.bc_handler = GhostCellBoundaryHandler(n_ghost)
         self._boundary_conditions = {}
         
-        # Operator splitting for stiff terms
+        # Operator splitting for stiff terms (CRITICAL FIX APPLIED)
         if use_operator_splitting:
             self.operator_splitter = AdaptiveOperatorSplitting()
             # Pre-select timestep method to eliminate runtime branching
             self._timestep_method = self._apply_operator_splitting_step
+            logger.info("Operator splitting enabled with COMPLETE LNS physics")
+            logger.info("CRITICAL FIX: Now includes objective derivative production terms")
         else:
             self.operator_splitter = None
             self._timestep_method = self._apply_direct_integration_step

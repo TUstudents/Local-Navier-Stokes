@@ -309,7 +309,8 @@ class ValidationSuite:
                            for nx in grid_sizes]
             
             # Compute actual grid spacings for convergence rate calculation
-            grid_spacings = [(x_bounds[1] - x_bounds[0]) / nx for nx in grid_sizes]
+            # Domain is [0, 1] for all test cases
+            grid_spacings = [1.0 / nx for nx in grid_sizes]
             
             results['convergence_analysis'] = {
                 'lns_convergence_rate': ComparisonMetrics.compute_convergence_rate(

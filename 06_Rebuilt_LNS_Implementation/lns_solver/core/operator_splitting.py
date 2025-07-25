@@ -156,7 +156,7 @@ class StrangSplitting(OperatorSplittingBase):
         Returns:
             Updated state after splitting step
         """
-        # Step 1: Source terms for dt/2 (implicit)
+        # Step 1: COMPLETE source terms for dt/2 (IMEX: production + relaxation)
         Q_half = self.implicit_solver.solve_relaxation_step(
             Q_current, dt/2, physics_params
         )
@@ -164,7 +164,7 @@ class StrangSplitting(OperatorSplittingBase):
         # Step 2: Hyperbolic terms for dt (explicit SSP-RK2)
         Q_hyp = self._explicit_hyperbolic_step(Q_half, dt, hyperbolic_rhs)
         
-        # Step 3: Source terms for dt/2 (implicit)
+        # Step 3: COMPLETE source terms for dt/2 (IMEX: production + relaxation)
         Q_final = self.implicit_solver.solve_relaxation_step(
             Q_hyp, dt/2, physics_params
         )
@@ -191,14 +191,19 @@ class StrangSplitting(OperatorSplittingBase):
 
 class ImplicitRelaxationSolver:
     """
-    Implicit solver for LNS relaxation source terms.
+    FIXED: IMEX solver for COMPLETE LNS source terms.
     
-    Solves the system:
-    ∂q/∂t = -(q - q_NSF)/τ_q
-    ∂σ/∂t = -(σ - σ_NSF)/τ_σ
+    Solves the FULL system including both relaxation AND production terms:
+    ∂q/∂t = -(q - q_NSF)/τ_q + PRODUCTION_TERMS(objective_derivatives)
+    ∂σ/∂t = -(σ - σ_NSF)/τ_σ + PRODUCTION_TERMS(objective_derivatives)
     
-    This can be solved exactly for linear relaxation:
-    q(t+dt) = q_NSF + (q(t) - q_NSF) * exp(-dt/τ_q)
+    CRITICAL FIX: This now includes the missing physics terms that were
+    completely dropped in the original implementation. The production terms
+    from objective derivatives are essential for correct viscoelastic behavior.
+    
+    Uses IMEX scheme:
+    - Relaxation terms: Implicit (exact solution for stiff terms)
+    - Production terms: Explicit (non-stiff, accurate for moderate CFL)
     """
     
     def __init__(self):
@@ -213,11 +218,18 @@ class ImplicitRelaxationSolver:
         physics_params: Dict
     ) -> np.ndarray:
         """
-        Solve relaxation equations implicitly.
+        CRITICAL FIX: Solve COMPLETE LNS source terms using IMEX scheme.
         
-        For the linear relaxation terms in LNS, we can solve exactly:
-        q^{n+1} = q_NSF + (q^n - q_NSF) * exp(-dt/τ_q)
-        σ^{n+1} = σ_NSF + (σ^n - σ_NSF) * exp(-dt/τ_σ)
+        This now includes BOTH the relaxation terms AND the production terms
+        from objective derivatives that were previously dropped.
+        
+        IMEX Implementation:
+        1. Relaxation terms (stiff): Implicit exact solution
+        2. Production terms (non-stiff): Explicit Euler update
+        
+        Full equation solved:
+        ∂q/∂t = -(q - q_NSF)/τ_q + PRODUCTION_q
+        ∂σ/∂t = -(σ - σ_NSF)/τ_σ + PRODUCTION_σ
         
         Args:
             Q_input: Input state
@@ -225,7 +237,7 @@ class ImplicitRelaxationSolver:
             physics_params: Physics parameters
             
         Returns:
-            State after implicit relaxation step
+            State after COMPLETE source term update
         """
         Q_output = Q_input.copy()
         
@@ -237,12 +249,21 @@ class ImplicitRelaxationSolver:
         if Q_input.shape[1] < 5:
             return Q_output  # No LNS variables to update
         
-        # Compute NSF targets (these depend on current flow state)
-        q_nsf, sigma_nsf = self._compute_nsf_targets(Q_input, physics_params)
+        # STEP 1: Compute production terms explicitly (CRITICAL FIX)
+        production_q, production_sigma = self._compute_production_terms(Q_input, physics_params)
         
-        # Current LNS variables
-        q_current = Q_input[:, 3]
-        sigma_current = Q_input[:, 4]
+        # STEP 2: Apply production terms explicitly (non-stiff part)
+        Q_with_production = Q_input.copy()
+        Q_with_production[:, 3] += dt * production_q  # Heat flux production
+        Q_with_production[:, 4] += dt * production_sigma  # Stress production
+        
+        # STEP 3: Apply relaxation terms implicitly (stiff part)
+        # Compute NSF targets based on updated state
+        q_nsf, sigma_nsf = self._compute_nsf_targets(Q_with_production, physics_params)
+        
+        # Current LNS variables after production update
+        q_current = Q_with_production[:, 3]
+        sigma_current = Q_with_production[:, 4]
         
         # Exact solution of linear relaxation ODEs
         exp_factor_q = np.exp(-dt / tau_q)
@@ -252,6 +273,51 @@ class ImplicitRelaxationSolver:
         Q_output[:, 4] = sigma_nsf + (sigma_current - sigma_nsf) * exp_factor_sigma
         
         return Q_output
+    
+    def _compute_production_terms(
+        self,
+        Q: np.ndarray,
+        physics_params: Dict
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        CRITICAL FIX: Compute the missing production terms from objective derivatives.
+        
+        These are the NON-STIFF terms that were completely dropped in the original
+        implementation, causing physically incorrect results.
+        
+        For 1D case:
+        - Heat flux production: From MCV objective derivative D_q/Dt transport terms
+        - Stress production: From UCM objective derivative D_σ/Dt transport terms
+        
+        Returns:
+            Tuple of (production_q, production_sigma) source terms
+        """
+        # Convert to primitive variables
+        rho = np.maximum(Q[:, 0], 1e-12)
+        u = Q[:, 1] / rho
+        
+        # Current LNS variables
+        q_current = Q[:, 3]  # Heat flux
+        sigma_current = Q[:, 4]  # Deviatoric stress
+        
+        # Compute gradients
+        dx = physics_params.get('dx', 0.01)
+        du_dx = np.gradient(u, dx)
+        dq_dx = np.gradient(q_current, dx)
+        dsigma_dx = np.gradient(sigma_current, dx)
+        
+        # === MCV PRODUCTION TERMS (Heat flux) ===
+        # From objective derivative: D_q/Dt = ∂q/∂t + u·∇q + (∇·u)q
+        # Production terms: u·∇q + (∇·u)q
+        production_q = u * dq_dx + du_dx * q_current
+        
+        # === UCM PRODUCTION TERMS (Stress) ===
+        # From objective derivative: D_σ/Dt = ∂σ/∂t + u·∇σ - 2σ(∂u/∂x)
+        # Production terms: u·∇σ - 2σ(∂u/∂x)
+        # The factor of 2 comes from the full 1D UCM tensor contraction
+        production_sigma = u * dsigma_dx - 2.0 * sigma_current * du_dx
+        
+        return production_q, production_sigma
     
     def _compute_nsf_targets(
         self,
